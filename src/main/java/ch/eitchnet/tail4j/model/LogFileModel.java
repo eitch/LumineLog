@@ -88,24 +88,45 @@ public class LogFileModel {
         long end = (index + 1 < lineOffsets.size()) ? lineOffsets.get(index + 1) : -1;
         
         try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "r")) {
-            FileChannel channel = raf.getChannel();
-            if (end == -1) end = channel.size();
-            
-            long length = end - start;
-            if (length <= 0) return "";
-            
-            // Memory map the line or just read it
-            MappedByteBuffer out = channel.map(FileChannel.MapMode.READ_ONLY, start, length);
-            byte[] bytes = new byte[(int) length];
-            out.get(bytes);
-            String line = new String(bytes);
-            if (line.endsWith("\n")) {
-                line = line.substring(0, line.length() - 1);
-            }
-            if (line.endsWith("\r")) {
-                line = line.substring(0, line.length() - 1);
-            }
-            return line;
+            return getLine(raf, start, end);
         }
+    }
+
+    private String getLine(RandomAccessFile raf, long start, long end) throws IOException {
+        FileChannel channel = raf.getChannel();
+        if (end == -1) end = channel.size();
+        
+        long length = end - start;
+        if (length <= 0) return "";
+        
+        // Memory map the line or just read it
+        MappedByteBuffer out = channel.map(FileChannel.MapMode.READ_ONLY, start, length);
+        byte[] bytes = new byte[(int) length];
+        out.get(bytes);
+        String line = new String(bytes);
+        if (line.endsWith("\n")) {
+            line = line.substring(0, line.length() - 1);
+        }
+        if (line.endsWith("\r")) {
+            line = line.substring(0, line.length() - 1);
+        }
+        return line;
+    }
+
+    public void iterateLines(LineProcessor processor) throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "r")) {
+            for (int i = 0; i < lineOffsets.size(); i++) {
+                long start = lineOffsets.get(i);
+                long end = (i + 1 < lineOffsets.size()) ? lineOffsets.get(i + 1) : -1;
+                String line = getLine(raf, start, end);
+                if (!processor.process(line, i)) {
+                    break;
+                }
+            }
+        }
+    }
+
+    public interface LineProcessor {
+        boolean process(String line, int lineNumber);
     }
 }

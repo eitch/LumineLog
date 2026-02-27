@@ -31,6 +31,8 @@ public class MainController {
     private Label statusLabel;
     @FXML
     private CheckBox tailCheckBox;
+    @FXML
+    private javafx.scene.layout.FlowPane highlightsPane;
 
     private LogFileModel logModel;
     private VirtualLogList logItems;
@@ -87,6 +89,7 @@ public class MainController {
             logItems = new VirtualLogList(logModel);
             logListView.setItems(logItems);
             statusLabel.setText("File: " + file.getAbsolutePath());
+            updateHighlightsBar();
             refreshLogView();
             startTailing();
         } catch (IOException e) {
@@ -117,6 +120,7 @@ public class MainController {
                         if (newCount != oldCount) {
                             Platform.runLater(() -> {
                                 logItems.fireSizeChanged(oldCount, newCount);
+                                updateHighlightsBar();
                                 if (newCount > oldCount) {
                                     logListView.scrollTo(newCount - 1);
                                 }
@@ -137,6 +141,7 @@ public class MainController {
             Color color = highlightColorPicker.getValue();
             String webColor = toWebColor(color);
             highlightRules.add(new HighlightRule(pattern, webColor, regexCheckBox.isSelected()));
+            updateHighlightsBar();
             logListView.refresh();
         }
     }
@@ -144,7 +149,50 @@ public class MainController {
     @FXML
     private void handleClearHighlights() {
         highlightRules.clear();
+        updateHighlightsBar();
         logListView.refresh();
+    }
+
+    private void updateHighlightsBar() {
+        if (logModel == null || highlightRules.isEmpty()) {
+            highlightsPane.getChildren().clear();
+            return;
+        }
+
+        List<HighlightRule> currentRules = new ArrayList<>(highlightRules);
+        new Thread(() -> {
+            int[] counts = new int[currentRules.size()];
+            try {
+                logModel.iterateLines((line, lineNumber) -> {
+                    if (line == null) return true;
+                    for (int j = 0; j < currentRules.size(); j++) {
+                        counts[j] += currentRules.get(j).countOccurrences(line);
+                    }
+                    return true;
+                });
+            } catch (IOException e) {
+                // ignore
+            }
+
+            Platform.runLater(() -> {
+                highlightsPane.getChildren().clear();
+                for (int i = 0; i < currentRules.size(); i++) {
+                    HighlightRule rule = currentRules.get(i);
+                    int count = counts[i];
+                    Label label = new Label(rule.pattern() + " (" + count + ")");
+                    label.setStyle("-fx-background-color: " + rule.color() + "; -fx-padding: 2 5 2 5; -fx-background-radius: 3;");
+
+                    label.setOnMouseClicked(event -> {
+                        highlightRules.remove(rule);
+                        updateHighlightsBar();
+                        logListView.refresh();
+                    });
+                    label.setTooltip(new Tooltip("Click to remove"));
+
+                    highlightsPane.getChildren().add(label);
+                }
+            });
+        }).start();
     }
 
     @FXML
