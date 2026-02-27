@@ -2,6 +2,7 @@ package ch.eitchnet.tail4j.controller;
 
 import ch.eitchnet.tail4j.model.HighlightRule;
 import ch.eitchnet.tail4j.model.LogFileModel;
+import ch.eitchnet.tail4j.model.LogLine;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -21,7 +22,7 @@ import java.util.TimerTask;
 public class MainController {
 
     @FXML
-    private ListView<String> logListView;
+    private ListView<LogLine> logListView;
     @FXML
     private TextField searchField;
     @FXML
@@ -35,26 +36,27 @@ public class MainController {
 
     private LogFileModel logModel;
     private final List<HighlightRule> highlightRules = new ArrayList<>();
-    private final ObservableList<String> logItems = FXCollections.observableArrayList();
+    private final ObservableList<LogLine> logItems = FXCollections.observableArrayList();
     private Timer tailTimer;
 
     @FXML
     public void initialize() {
         logListView.setCellFactory(new Callback<>() {
             @Override
-            public ListCell<String> call(ListView<String> param) {
+            public ListCell<LogLine> call(ListView<LogLine> param) {
                 return new ListCell<>() {
                     @Override
-                    protected void updateItem(String item, boolean empty) {
+                    protected void updateItem(LogLine item, boolean empty) {
                         super.updateItem(item, empty);
                         if (empty || item == null) {
                             setText(null);
                             setStyle("");
                         } else {
-                            setText(item);
+                            String formattedLine = String.format("%5d: %s", item.lineNumber(), item.content());
+                            setText(formattedLine);
                             setStyle("");
                             for (HighlightRule rule : highlightRules) {
-                                if (rule.matches(item)) {
+                                if (rule.matches(item.content())) {
                                     String color = rule.color();
                                     setStyle("-fx-background-color: " + color + ";");
                                     break;
@@ -103,9 +105,9 @@ public class MainController {
         int start = Math.max(0, lineCount - 1000);
         for (int i = start; i < lineCount; i++) {
             try {
-                logItems.add(logModel.getLine(i));
+                logItems.add(new LogLine(i + 1, logModel.getLine(i)));
             } catch (IOException e) {
-                logItems.add("ERROR READING LINE " + i);
+                logItems.add(new LogLine(i + 1, "ERROR READING LINE " + i));
             }
         }
         logListView.setItems(logItems);
@@ -125,9 +127,9 @@ public class MainController {
                         logModel.updateIndex();
                         int newCount = logModel.getLineCount();
                         if (newCount > oldCount) {
-                            List<String> newLines = new ArrayList<>();
+                            List<LogLine> newLines = new ArrayList<>();
                             for (int i = oldCount; i < newCount; i++) {
-                                newLines.add(logModel.getLine(i));
+                                newLines.add(new LogLine(i + 1, logModel.getLine(i)));
                             }
                             Platform.runLater(() -> {
                                 logItems.addAll(newLines);
