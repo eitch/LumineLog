@@ -5,7 +5,9 @@ import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
+import javafx.geometry.Pos;
 import javafx.scene.control.*;
+import javafx.scene.layout.HBox;
 import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import javafx.util.Callback;
@@ -179,20 +181,56 @@ public class MainController {
                 for (int i = 0; i < currentRules.size(); i++) {
                     HighlightRule rule = currentRules.get(i);
                     int count = counts[i];
-                    Label label = new Label(rule.pattern() + " (" + count + ")");
-                    label.setStyle("-fx-background-color: " + rule.color() + "; -fx-padding: 2 5 2 5; -fx-background-radius: 3;");
 
-                    label.setOnMouseClicked(event -> {
+                    HBox highlightTag = new HBox(5);
+                    highlightTag.setAlignment(Pos.CENTER_LEFT);
+                    highlightTag.setStyle("-fx-background-color: " + rule.color() + "; -fx-padding: 2 5 2 5; -fx-background-radius: 3; -fx-cursor: hand;");
+
+                    Label label = new Label(rule.pattern() + " (" + count + ")");
+                    
+                    Button dismissBtn = new Button("×");
+                    dismissBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 2 0 2; -fx-font-weight: bold;");
+                    dismissBtn.setTooltip(new Tooltip("Remove highlight"));
+                    dismissBtn.setOnAction(event -> {
                         highlightRules.remove(rule);
                         updateHighlightsBar();
                         logListView.refresh();
                     });
-                    label.setTooltip(new Tooltip("Click to remove"));
 
-                    highlightsPane.getChildren().add(label);
+                    highlightTag.getChildren().addAll(label, dismissBtn);
+
+                    highlightTag.setOnMouseClicked(event -> {
+                        if (event.getTarget() == dismissBtn) return;
+                        jumpToNextOccurrence(rule);
+                    });
+                    Tooltip.install(highlightTag, new Tooltip("Click to jump to next occurrence"));
+
+                    highlightsPane.getChildren().add(highlightTag);
                 }
             });
         }).start();
+    }
+
+    private void jumpToNextOccurrence(HighlightRule rule) {
+        if (logModel == null) return;
+
+        int currentIndex = logListView.getSelectionModel().getSelectedIndex();
+        int lineCount = logModel.getLineCount();
+        int startIndex = (currentIndex + 1) % lineCount;
+
+        for (int i = 0; i < lineCount; i++) {
+            int index = (startIndex + i) % lineCount;
+            try {
+                String line = logModel.getLine(index);
+                if (line != null && rule.matches(line)) {
+                    logListView.getSelectionModel().select(index);
+                    logListView.scrollTo(index);
+                    return;
+                }
+            } catch (IOException e) {
+                // ignore
+            }
+        }
     }
 
     @FXML
