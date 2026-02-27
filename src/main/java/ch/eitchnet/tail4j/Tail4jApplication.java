@@ -2,31 +2,24 @@ package ch.eitchnet.tail4j;
 
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.stage.Stage;
 
 import java.io.IOException;
 
 public class Tail4jApplication extends Application {
-	private LogViewerController controller;
+    @Override
+    public void start(Stage stage) throws IOException {
+        FXMLLoader loader = new FXMLLoader(getClass().getResource("view/main.fxml"));
+        Parent root = loader.load();
+        Scene scene = new Scene(root, 1024, 768);
+        stage.setScene(scene);
+        stage.setTitle("Tail4j Log Viewer");
+        stage.show();
+    }
 
-	@Override
-	public void start(Stage stage) throws IOException {
-		FXMLLoader fxmlLoader = new FXMLLoader(Tail4jApplication.class.getResource("log-viewer.fxml"));
-		Scene scene = new Scene(fxmlLoader.load(), 900, 600);
-		controller = fxmlLoader.getController();
-
-		stage.setTitle("Tail4j - Log File Viewer");
-		stage.setScene(scene);
-		stage.setOnCloseRequest(event -> {
-			if (controller != null) {
-				controller.shutdown();
-			}
-		});
-		stage.show();
-	}
-
-	public static void main(String[] args) {
-		launch(args);
-	}
+    public static void main(String[] args) {
+        launch();
+    }
 }

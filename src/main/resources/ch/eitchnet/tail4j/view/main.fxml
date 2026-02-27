@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<VBox xmlns="http://javafx.com/javafx"
+      xmlns:fx="http://javafx.com/fxml"
+      fx:controller="ch.eitchnet.tail4j.controller.MainController"
+      prefHeight="600.0" prefWidth="800.0">
+
+    <MenuBar>
+        <Menu text="File">
+            <MenuItem text="Open" onAction="#handleOpen"/>
+            <MenuItem text="Exit" onAction="#handleExit"/>
+        </Menu>
+    </MenuBar>
+
+    <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 10;">
+        <Label text="Search:"/>
+        <TextField fx:id="searchField" HBox.hgrow="ALWAYS"/>
+        <CheckBox fx:id="regexCheckBox" text="Regex"/>
+        <ColorPicker fx:id="highlightColorPicker"/>
+        <Button text="Add Highlight" onAction="#handleAddHighlight"/>
+        <Button text="Clear Highlights" onAction="#handleClearHighlights"/>
+    </HBox>
+    
+    <ListView fx:id="logListView" VBox.vgrow="ALWAYS" />
+
+    <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 5;">
+        <Label fx:id="statusLabel" text="No file opened"/>
+        <Separator orientation="VERTICAL"/>
+        <CheckBox fx:id="tailCheckBox" text="Follow Tail" selected="true"/>
+    </HBox>
+
+</VBox>
