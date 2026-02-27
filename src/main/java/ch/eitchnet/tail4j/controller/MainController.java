@@ -1,8 +1,6 @@
 package ch.eitchnet.tail4j.controller;
 
-import ch.eitchnet.tail4j.model.HighlightRule;
-import ch.eitchnet.tail4j.model.LogFileModel;
-import ch.eitchnet.tail4j.model.LogLine;
+import ch.eitchnet.tail4j.model.*;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -35,8 +33,8 @@ public class MainController {
     private CheckBox tailCheckBox;
 
     private LogFileModel logModel;
+    private VirtualLogList logItems;
     private final List<HighlightRule> highlightRules = new ArrayList<>();
-    private final ObservableList<LogLine> logItems = FXCollections.observableArrayList();
     private Timer tailTimer;
 
     @FXML
@@ -86,6 +84,8 @@ public class MainController {
         }
         try {
             logModel = new LogFileModel(file.toPath());
+            logItems = new VirtualLogList(logModel);
+            logListView.setItems(logItems);
             statusLabel.setText("File: " + file.getAbsolutePath());
             refreshLogView();
             startTailing();
@@ -95,24 +95,12 @@ public class MainController {
     }
 
     private void refreshLogView() {
-        logItems.clear();
-        int lineCount = logModel.getLineCount();
-        // For very large files, we might not want to add all to logItems if it's not virtualized enough
-        // but ListView's observable list handles it reasonably well until a certain point.
-        // However, BareTail-like behavior means we want to see the tail.
-        
-        // Let's just load the last 1000 lines initially to be safe if it's huge
-        int start = Math.max(0, lineCount - 1000);
-        for (int i = start; i < lineCount; i++) {
-            try {
-                logItems.add(new LogLine(i + 1, logModel.getLine(i)));
-            } catch (IOException e) {
-                logItems.add(new LogLine(i + 1, "ERROR READING LINE " + i));
+        if (logItems != null) {
+            int lineCount = logModel.getLineCount();
+            logItems.fireSizeChanged(0, lineCount);
+            if (lineCount > 0) {
+                logListView.scrollTo(lineCount - 1);
             }
-        }
-        logListView.setItems(logItems);
-        if (!logItems.isEmpty()) {
-            logListView.scrollTo(logItems.size() - 1);
         }
     }
 
@@ -126,22 +114,13 @@ public class MainController {
                         int oldCount = logModel.getLineCount();
                         logModel.updateIndex();
                         int newCount = logModel.getLineCount();
-                        if (newCount > oldCount) {
-                            List<LogLine> newLines = new ArrayList<>();
-                            for (int i = oldCount; i < newCount; i++) {
-                                newLines.add(new LogLine(i + 1, logModel.getLine(i)));
-                            }
+                        if (newCount != oldCount) {
                             Platform.runLater(() -> {
-                                logItems.addAll(newLines);
-                                // Limit items to prevent memory issues if tailing forever
-                                if (logItems.size() > 5000) {
-                                    logItems.remove(0, logItems.size() - 5000);
+                                logItems.fireSizeChanged(oldCount, newCount);
+                                if (newCount > oldCount) {
+                                    logListView.scrollTo(newCount - 1);
                                 }
-                                logListView.scrollTo(logItems.size() - 1);
                             });
-                        } else if (newCount < oldCount) {
-                            // File was truncated
-                            Platform.runLater(() -> refreshLogView());
                         }
                     } catch (IOException e) {
                         // ignore or log

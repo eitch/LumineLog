@@ -59,7 +59,7 @@ public class LogFileModel {
             }
 
             if (fileSize == lastProcessedPosition) return;
-            
+
             ByteBuffer buffer = ByteBuffer.allocate(8192);
             long currentPos = lastProcessedPosition;
             while (currentPos < fileSize) {
