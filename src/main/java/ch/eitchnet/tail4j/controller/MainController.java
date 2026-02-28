@@ -8,8 +8,11 @@ import javafx.fxml.FXML;
 import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
+import javafx.stage.Stage;
+import javafx.scene.Scene;
 import javafx.util.Callback;
 
 import java.io.File;
@@ -201,9 +204,9 @@ public class MainController {
 
                     highlightTag.setOnMouseClicked(event -> {
                         if (event.getTarget() == dismissBtn) return;
-                        jumpToNextOccurrence(rule);
+                        showOccurrences(rule);
                     });
-                    Tooltip.install(highlightTag, new Tooltip("Click to jump to next occurrence"));
+                    Tooltip.install(highlightTag, new Tooltip("Click to show all occurrences"));
 
                     highlightsPane.getChildren().add(highlightTag);
                 }
@@ -211,26 +214,72 @@ public class MainController {
         }).start();
     }
 
-    private void jumpToNextOccurrence(HighlightRule rule) {
+    private void showOccurrences(HighlightRule rule) {
         if (logModel == null) return;
 
-        int currentIndex = logListView.getSelectionModel().getSelectedIndex();
-        int lineCount = logModel.getLineCount();
-        int startIndex = (currentIndex + 1) % lineCount;
-
-        for (int i = 0; i < lineCount; i++) {
-            int index = (startIndex + i) % lineCount;
+        new Thread(() -> {
+            List<LogLine> occurrences = new ArrayList<>();
             try {
-                String line = logModel.getLine(index);
-                if (line != null && rule.matches(line)) {
-                    logListView.getSelectionModel().select(index);
-                    logListView.scrollTo(index);
+                logModel.iterateLines((line, lineNumber) -> {
+                    if (line != null && rule.matches(line)) {
+                        occurrences.add(new LogLine(lineNumber + 1, line));
+                    }
+                    return true;
+                });
+            } catch (IOException e) {
+                Platform.runLater(() -> showError("Error searching for occurrences: " + e.getMessage()));
+                return;
+            }
+
+            Platform.runLater(() -> {
+                if (occurrences.isEmpty()) {
+                    Alert alert = new Alert(Alert.AlertType.INFORMATION);
+                    alert.setTitle("No Occurrences");
+                    alert.setHeaderText(null);
+                    alert.setContentText("No occurrences found for highlight rule: " + rule.pattern());
+                    alert.showAndWait();
                     return;
                 }
-            } catch (IOException e) {
-                // ignore
-            }
-        }
+
+                ListView<LogLine> listView = new ListView<>(FXCollections.observableArrayList(occurrences));
+                listView.setCellFactory(param -> new ListCell<>() {
+                    @Override
+                    protected void updateItem(LogLine item, boolean empty) {
+                        super.updateItem(item, empty);
+                        if (empty || item == null) {
+                            setText(null);
+                        } else {
+                            setText(String.format("%5d: %s", item.lineNumber(), item.content()));
+                        }
+                    }
+                });
+
+                Stage stage = new Stage();
+                stage.setTitle("Occurrences for: " + rule.pattern());
+
+                listView.setOnMouseClicked(event -> {
+                    if (event.getClickCount() == 2) {
+                        LogLine selected = listView.getSelectionModel().getSelectedItem();
+                        if (selected != null) {
+                            int index = selected.lineNumber() - 1;
+                            logListView.getSelectionModel().select(index);
+                            logListView.scrollTo(index);
+                        }
+                    }
+                });
+
+                VBox layout = new VBox(10);
+                layout.setStyle("-fx-padding: 10;");
+                Label header = new Label("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
+                header.setStyle("-fx-font-weight: bold;");
+                VBox.setVgrow(listView, javafx.scene.layout.Priority.ALWAYS);
+                layout.getChildren().addAll(header, listView);
+
+                Scene scene = new Scene(layout, 800, 600);
+                stage.setScene(scene);
+                stage.show();
+            });
+        }).start();
     }
 
     @FXML
