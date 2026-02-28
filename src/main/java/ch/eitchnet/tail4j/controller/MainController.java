@@ -21,8 +21,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.prefs.Preferences;
 
 public class MainController {
+
+    private static final String PREF_LAST_OPEN_FILE = "lastOpenFile";
 
     @FXML
     private ListView<LogLine> logListView;
@@ -73,6 +76,19 @@ public class MainController {
             }
         });
         highlightColorPicker.setValue(Color.YELLOW);
+
+        Platform.runLater(this::loadLastFile);
+    }
+
+    private void loadLastFile() {
+        Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+        String lastFile = prefs.get(PREF_LAST_OPEN_FILE, null);
+        if (lastFile != null) {
+            File file = new File(lastFile);
+            if (file.exists()) {
+                openFile(file);
+            }
+        }
     }
 
     @FXML
@@ -97,6 +113,9 @@ public class MainController {
             updateHighlightsBar();
             refreshLogView();
             startTailing();
+
+            Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+            prefs.put(PREF_LAST_OPEN_FILE, file.getAbsolutePath());
         } catch (IOException e) {
             showError("Could not open file: " + e.getMessage());
         }
