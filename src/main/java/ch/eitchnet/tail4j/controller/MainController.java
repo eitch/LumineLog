@@ -206,13 +206,20 @@ public class MainController {
 
                     HBox highlightTag = new HBox(5);
                     highlightTag.setAlignment(Pos.CENTER_LEFT);
-                    highlightTag.setStyle("-fx-background-color: " + rule.color() + "; -fx-padding: 2 5 2 5; -fx-background-radius: 3; -fx-cursor: hand;");
+                    String baseStyle = "-fx-background-color: " + rule.color() + "; -fx-padding: 8 12 8 12; -fx-background-radius: 4; -fx-cursor: hand; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 3, 0, 0, 1);";
+                    highlightTag.setStyle(baseStyle);
 
                     Label label = new Label(rule.pattern() + " (" + count + ")");
-                    
+                    label.setStyle("-fx-text-fill: black; -fx-font-weight: bold;");
+                    HBox.setHgrow(label, javafx.scene.layout.Priority.ALWAYS);
+
                     Button dismissBtn = new Button("×");
-                    dismissBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 2 0 2; -fx-font-weight: bold;");
+                    dismissBtn.setStyle("-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;");
                     dismissBtn.setTooltip(new Tooltip("Remove highlight"));
+                    HBox.setMargin(dismissBtn, new javafx.geometry.Insets(0, -4, 0, 0));
+
+                    dismissBtn.setOnMouseEntered(e -> dismissBtn.setStyle("-fx-background-color: rgba(255,255,255,0.6); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
+                    dismissBtn.setOnMouseExited(e -> dismissBtn.setStyle("-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
                     dismissBtn.setOnAction(event -> {
                         highlightRules.remove(rule);
                         updateHighlightsBar();
@@ -220,6 +227,9 @@ public class MainController {
                     });
 
                     highlightTag.getChildren().addAll(label, dismissBtn);
+
+                    highlightTag.setOnMouseEntered(e -> highlightTag.setStyle(baseStyle + "-fx-brightness: 1.1;"));
+                    highlightTag.setOnMouseExited(e -> highlightTag.setStyle(baseStyle));
 
                     highlightTag.setOnMouseClicked(event -> {
                         if (event.getTarget() == dismissBtn) return;
