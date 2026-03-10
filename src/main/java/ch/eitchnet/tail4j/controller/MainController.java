@@ -17,6 +17,8 @@ import javafx.scene.paint.Color;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.util.Callback;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -25,8 +27,6 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.prefs.Preferences;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class MainController {
 
@@ -57,7 +57,7 @@ public class MainController {
 	@FXML
 	private javafx.scene.layout.FlowPane highlightsPane;
 
-	private String currentGroup = "Default";
+	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
 
 	private static class TabState {
@@ -143,11 +143,14 @@ public class MainController {
 			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
 			logger.info("Loading highlights from preferences node: {}", prefs.absolutePath());
 
-			String groupsStr = prefs.get(PREF_GROUPS, "Default");
+			if (currentGroup == null || currentGroup.isEmpty()) {
+				currentGroup = prefs.get(PREF_LAST_GROUP, "Default");
+			}
+
+			String groupsStr = prefs.get(PREF_GROUPS, this.currentGroup);
 			String[] groups = groupsStr.split(",");
 			highlightGroupComboBox.getItems().setAll(groups);
 
-			currentGroup = prefs.get(PREF_LAST_GROUP, "Default");
 			if (highlightGroupComboBox.getItems().isEmpty()) {
 				highlightGroupComboBox.getItems().add("Default");
 				currentGroup = "Default";
@@ -202,8 +205,8 @@ public class MainController {
 			return;
 		}
 
-		saveHighlights();
 		currentGroup = newGroup;
+		saveHighlights();
 		if (!highlightGroupComboBox.getItems().contains(currentGroup)) {
 			highlightGroupComboBox.getItems().add(currentGroup);
 		}
@@ -211,7 +214,7 @@ public class MainController {
 
 		TabState state = getActiveTabState();
 		if (state != null) {
-			refreshLogView(state);
+			state.logListView.refresh();
 		}
 	}
 
@@ -444,6 +447,7 @@ public class MainController {
 			if (lineCount > 0) {
 				state.logListView.scrollTo(lineCount - 1);
 			}
+			state.logListView.refresh();
 		}
 	}
 
