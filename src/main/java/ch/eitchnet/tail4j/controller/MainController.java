@@ -374,11 +374,11 @@ public class MainController {
 						} else {
 							String formattedLine = String.format("%5d: %s", item.lineNumber(), item.content());
 							setText(formattedLine);
-							setStyle("");
+							setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12");
 							for (HighlightRule rule : highlightRules) {
 								if (rule.matches(item.content())) {
 									String color = rule.getColor();
-									setStyle("-fx-background-color: " + color + ";");
+									setStyle("-fx-background-color: " + color + "; -fx-font-family: 'monospace'; -fx-font-size: 12");
 									break;
 								}
 							}
@@ -672,8 +672,10 @@ public class MainController {
 						super.updateItem(item, empty);
 						if (empty || item == null) {
 							setText(null);
+							setStyle("");
 						} else {
 							setText(String.format("%5d: %s", item.lineNumber(), item.content()));
+							setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12");
 						}
 					}
 				});
