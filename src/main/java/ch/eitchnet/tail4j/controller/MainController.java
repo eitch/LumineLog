@@ -25,8 +25,12 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.prefs.Preferences;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class MainController {
+
+	private static final Logger logger = LoggerFactory.getLogger(MainController.class);
 
 	private static final String PREF_LAST_OPEN_FILE = "lastOpenFile";
 	private static final String PREF_HIGHLIGHT_COUNT = "highlightCount";
@@ -103,6 +107,7 @@ public class MainController {
 
 	private void saveHighlights() {
 		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+		logger.info("Saving highlights to preferences node: {}", prefs.absolutePath());
 		prefs.putInt(PREF_HIGHLIGHT_COUNT, highlightRules.size());
 		for (int i = 0; i < highlightRules.size(); i++) {
 			HighlightRule rule = highlightRules.get(i);
@@ -114,6 +119,7 @@ public class MainController {
 
 	private void loadHighlights() {
 		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+		logger.info("Loading highlights from preferences node: {}", prefs.absolutePath());
 		int count = prefs.getInt(PREF_HIGHLIGHT_COUNT, 0);
 		highlightRules.clear();
 		for (int i = 0; i < count; i++) {
@@ -162,7 +168,7 @@ public class MainController {
 			TabState state = new TabState(file, logModel, logItems, logListView);
 			tab.setUserData(state);
 			tab.setOnClosed(_ -> {
-				System.out.println("Closing tab for file " + file.getAbsolutePath());
+				logger.info("Closing tab for file {}", file.getAbsolutePath());
 				state.stopTailing();
 			});
 
