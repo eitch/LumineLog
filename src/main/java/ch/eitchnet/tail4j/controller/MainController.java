@@ -50,6 +50,7 @@ public class MainController {
 
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
+	private final java.util.Map<HighlightRule, Stage> openOccurrenceStages = new java.util.HashMap<>();
 
 	private static class TabState {
 		File file;
@@ -573,26 +574,64 @@ public class MainController {
 	}
 
 	private void showOccurrences(HighlightRule rule) {
+		if (openOccurrenceStages.containsKey(rule)) {
+			openOccurrenceStages.get(rule).toFront();
+			return;
+		}
+
 		TabState state = getActiveTabState();
 		if (state == null || state.logModel == null)
 			return;
 
+		Stage stage = new Stage();
+		stage.setTitle("Searching occurrences for: " + rule.getPattern());
+		openOccurrenceStages.put(rule, stage);
+		stage.setOnCloseRequest(_ -> openOccurrenceStages.remove(rule));
+
+		VBox layout = new VBox(10);
+		layout.setStyle("-fx-padding: 10;");
+		Label header = new Label("Searching for occurrences...");
+		header.setStyle("-fx-font-weight: bold;");
+		ProgressBar progressBar = new ProgressBar(0);
+		progressBar.setMaxWidth(Double.MAX_VALUE);
+		layout.getChildren().addAll(header, progressBar);
+
+		Scene scene = new Scene(layout, 800, 600);
+		stage.setScene(scene);
+		stage.show();
+
 		new Thread(() -> {
 			List<LogLine> occurrences = new ArrayList<>();
 			try {
+				int totalLines = state.logModel.getLineCount();
 				state.logModel.iterateLines((line, lineNumber) -> {
 					if (line != null && rule.matches(line)) {
 						occurrences.add(new LogLine(lineNumber + 1, line));
 					}
+					if (lineNumber % 1000 == 0) {
+						double progress = (double) lineNumber / totalLines;
+						Platform.runLater(() -> {
+							progressBar.setProgress(progress);
+							header.setText(
+									"Searching for occurrences... (" + occurrences.size() + " found)");
+						});
+					}
 					return true;
 				});
 			} catch (IOException e) {
-				Platform.runLater(() -> showError("Error searching for occurrences: " + e.getMessage()));
+				Platform.runLater(() -> {
+					openOccurrenceStages.remove(rule);
+					stage.close();
+					showError("Error searching for occurrences: " + e.getMessage());
+				});
 				return;
 			}
 
 			Platform.runLater(() -> {
+				progressBar.setProgress(1.0);
 				if (occurrences.isEmpty()) {
+					openOccurrenceStages.remove(rule);
+					stage.close();
 					Alert alert = new Alert(Alert.AlertType.INFORMATION);
 					alert.setTitle("No Occurrences");
 					alert.setHeaderText(null);
@@ -600,6 +639,9 @@ public class MainController {
 					alert.showAndWait();
 					return;
 				}
+
+				stage.setTitle("Occurrences for: " + rule.getPattern());
+				header.setText("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
 
 				ListView<LogLine> listView = new ListView<>(FXCollections.observableArrayList(occurrences));
 				listView.setCellFactory(_ -> new ListCell<>() {
@@ -614,9 +656,6 @@ public class MainController {
 					}
 				});
 
-				Stage stage = new Stage();
-				stage.setTitle("Occurrences for: " + rule.getPattern());
-
 				listView.setOnMouseClicked(event -> {
 					if (event.getClickCount() == 2) {
 						LogLine selected = listView.getSelectionModel().getSelectedItem();
@@ -628,16 +667,9 @@ public class MainController {
 					}
 				});
 
-				VBox layout = new VBox(10);
-				layout.setStyle("-fx-padding: 10;");
-				Label header = new Label("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
-				header.setStyle("-fx-font-weight: bold;");
 				VBox.setVgrow(listView, javafx.scene.layout.Priority.ALWAYS);
-				layout.getChildren().addAll(header, listView);
-
-				Scene scene = new Scene(layout, 800, 600);
-				stage.setScene(scene);
-				stage.show();
+				layout.getChildren().remove(progressBar);
+				layout.getChildren().add(listView);
 			});
 		}).start();
 	}
