@@ -26,8 +26,8 @@
     </HBox>
 
     <FlowPane fx:id="highlightsPane" hgap="10" vgap="5" style="-fx-padding: 0 10 10 10;"/>
-    
-    <ListView fx:id="logListView" VBox.vgrow="ALWAYS" />
+
+    <TabPane fx:id="tabPane" VBox.vgrow="ALWAYS" tabClosingPolicy="ALL_TABS" />
 
     <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 5;">
         <Label fx:id="statusLabel" text="No file opened"/>
