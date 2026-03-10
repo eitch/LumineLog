@@ -4,13 +4,17 @@ import ch.eitchnet.tail4j.model.*;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
+import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
+import javafx.scene.text.Text;
+import javafx.scene.text.TextFlow;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.util.Callback;
@@ -85,7 +89,7 @@ public class MainController {
 
 	@FXML
 	public void initialize() {
-		highlightColorPicker.setValue(Color.RED);
+		highlightColorPicker.setValue(Color.valueOf("#ff8080"));
 		loadHighlights();
 		highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
@@ -317,7 +321,7 @@ public class MainController {
 		try {
 			LogFileModel logModel = new LogFileModel(file.toPath());
 			VirtualLogList logItems = new VirtualLogList(logModel);
-			ListView<LogLine> logListView = createLogListView(logItems);
+			ListView<LogLine> logListView = createLogListView();
 
 			Tab tab = new Tab();
 			Label tabLabel = new Label(file.getName());
@@ -353,41 +357,20 @@ public class MainController {
 			refreshLogView(state);
 			startTailing(state);
 
-			saveHighlights();
+			Platform.runLater(() -> logListView.setItems(logItems));
+
 		} catch (IOException e) {
 			showError("Could not open file: " + e.getMessage());
 		}
 	}
 
-	private ListView<LogLine> createLogListView(VirtualLogList logItems) {
-		ListView<LogLine> logListView = new ListView<>(logItems);
-		logListView.setCellFactory(new Callback<>() {
-			@Override
-			public ListCell<LogLine> call(ListView<LogLine> param) {
-				return new ListCell<>() {
-					@Override
-					protected void updateItem(LogLine item, boolean empty) {
-						super.updateItem(item, empty);
-						if (empty || item == null) {
-							setText(null);
-							setStyle("");
-						} else {
-							String formattedLine = String.format("%5d: %s", item.lineNumber(), item.content());
-							setText(formattedLine);
-							setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12");
-							for (HighlightRule rule : highlightRules) {
-								if (rule.matches(item.content())) {
-									String color = rule.getColor();
-									setStyle("-fx-background-color: " + color + "; -fx-font-family: 'monospace'; -fx-font-size: 12");
-									break;
-								}
-							}
-						}
-					}
-				};
-			}
-		});
+	private ListView<LogLine> createLogListView() {
+		ListView<LogLine> logListView = new ListView<>();
+		logListView.setCellFactory(getHighlightingCellCallback());
 		return logListView;
+	}
+
+	private record MatchWithColor(int start, int end, String color) {
 	}
 
 	private TabState getActiveTabState() {
@@ -618,7 +601,7 @@ public class MainController {
 		progressBar.setMaxWidth(Double.MAX_VALUE);
 		layout.getChildren().addAll(header, progressBar);
 
-		Scene scene = new Scene(layout, 800, 600);
+		Scene scene = new Scene(layout, 1000, 800);
 		stage.setScene(scene);
 		stage.show();
 
@@ -634,8 +617,7 @@ public class MainController {
 						double progress = (double) lineNumber / totalLines;
 						Platform.runLater(() -> {
 							progressBar.setProgress(progress);
-							header.setText(
-									"Searching for occurrences... (" + occurrences.size() + " found)");
+							header.setText("Searching for occurrences... (" + occurrences.size() + " found)");
 						});
 					}
 					return true;
@@ -666,19 +648,7 @@ public class MainController {
 				header.setText("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
 
 				ListView<LogLine> listView = new ListView<>(FXCollections.observableArrayList(occurrences));
-				listView.setCellFactory(_ -> new ListCell<>() {
-					@Override
-					protected void updateItem(LogLine item, boolean empty) {
-						super.updateItem(item, empty);
-						if (empty || item == null) {
-							setText(null);
-							setStyle("");
-						} else {
-							setText(String.format("%5d: %s", item.lineNumber(), item.content()));
-							setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12");
-						}
-					}
-				});
+				listView.setCellFactory(getHighlightingCellCallback(rule));
 
 				listView.setOnMouseClicked(event -> {
 					if (event.getClickCount() == 2) {
@@ -696,6 +666,146 @@ public class MainController {
 				layout.getChildren().add(listView);
 			});
 		}).start();
+	}
+
+	private Callback<ListView<LogLine>, ListCell<LogLine>> getHighlightingCellCallback() {
+		return new Callback<>() {
+			@Override
+			public ListCell<LogLine> call(ListView<LogLine> param) {
+				return new ListCell<>() {
+					@Override
+					protected void updateItem(LogLine item, boolean empty) {
+						super.updateItem(item, empty);
+						if (handleEmptyItem(this, item, empty))
+							return;
+
+						TextFlow textFlow = createTextFlow(item);
+
+						String content = item.content();
+						if (highlightRules.isEmpty()) {
+							addText(content, "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+						} else {
+							// Find all matches for all rules
+							List<MatchWithColor> matches = findMatches(content);
+
+							// Merge/Resolve overlapping matches (simplified: first one wins)
+							int lastEnd = 0;
+							for (MatchWithColor match : matches) {
+								if (match.start < lastEnd)
+									continue;
+
+								// Add non-highlighted part
+								if (match.start > lastEnd)
+									addText(content.substring(lastEnd, match.start),
+											"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+
+								Label highlightLabel = new Label(content.substring(match.start, match.end));
+								highlightLabel.setMinHeight(Region.USE_PREF_SIZE);
+								highlightLabel.setStyle(
+										"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-background-color: "
+												+ match.color
+												+ "; -fx-padding: 0;");
+								textFlow.getChildren().add(highlightLabel);
+
+								lastEnd = match.end;
+							}
+
+							// Add remaining part
+							if (lastEnd < content.length()) {
+								addText(content.substring(lastEnd), "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;",
+										textFlow);
+							}
+						}
+
+						setGraphic(textFlow);
+						setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;");
+					}
+				};
+			}
+		};
+	}
+
+	private Callback<ListView<LogLine>, ListCell<LogLine>> getHighlightingCellCallback(HighlightRule rule) {
+		return _ -> new ListCell<>() {
+			@Override
+			protected void updateItem(LogLine item, boolean empty) {
+				super.updateItem(item, empty);
+				if (handleEmptyItem(this, item, empty))
+					return;
+
+				TextFlow textFlow = createTextFlow(item);
+
+				String content = item.content();
+				// Find all matches for this specific rule (which is 'rule' from showOccurrences)
+				List<HighlightRule.MatchRange> ranges = rule.findMatches(content);
+				int lastEnd = 0;
+				for (HighlightRule.MatchRange range : ranges) {
+					if (range.start() > lastEnd) {
+						addText(content.substring(lastEnd, range.start()),
+								"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+					}
+					Label highlightLabel = new Label(content.substring(range.start(), range.end()));
+					highlightLabel.setMinHeight(Region.USE_PREF_SIZE);
+					highlightLabel.setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-background-color: "
+							+ rule.getColor()
+							+ "; -fx-padding: 0;");
+					textFlow.getChildren().add(highlightLabel);
+					lastEnd = range.end();
+				}
+				if (lastEnd < content.length()) {
+					addText(content.substring(lastEnd), "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+				}
+
+				setGraphic(textFlow);
+				setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;");
+			}
+		};
+	}
+
+	private List<MatchWithColor> findMatches(String content) {
+		List<MatchWithColor> matches = new ArrayList<>();
+		for (HighlightRule rule : highlightRules) {
+			for (HighlightRule.MatchRange range : rule.findMatches(content)) {
+				matches.add(new MatchWithColor(range.start(), range.end(), rule.getColor()));
+			}
+		}
+
+		// Sort matches by start index
+		matches.sort((m1, m2) -> {
+			int cmp = Integer.compare(m1.start, m2.start);
+			if (cmp != 0)
+				return cmp;
+			return Integer.compare(m2.end, m1.end); // longer first
+		});
+
+		return matches;
+	}
+
+	private static void addText(String content, String style, TextFlow textFlow) {
+		Text contentText = new Text(content);
+		contentText.setStyle(style);
+		textFlow.getChildren().add(contentText);
+	}
+
+	private boolean handleEmptyItem(ListCell<LogLine> listCell, LogLine item, boolean empty) {
+		if (!empty && item != null)
+			return false;
+
+		listCell.setText(null);
+		listCell.setGraphic(null);
+		listCell.setStyle("");
+		return true;
+	}
+
+	private static TextFlow createTextFlow(LogLine item) {
+		TextFlow textFlow = new TextFlow();
+		textFlow.setLineSpacing(0);
+		textFlow.setPadding(Insets.EMPTY);
+		textFlow.setMinHeight(16);
+		textFlow.setMaxHeight(16);
+		addText(String.format("%5d: ", item.lineNumber()),
+				"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-fill: gray;", textFlow);
+		return textFlow;
 	}
 
 	@FXML

@@ -127,4 +127,25 @@ public class LogFileModelTest {
 		assertEquals("Line 3", iteratedLines.get(0));
 		assertEquals("Line 4", iteratedLines.get(1));
 	}
+
+	@Test
+	public void testHighlightRuleMatches() {
+		HighlightRule rule = new HighlightRule("test", "red", false);
+		List<HighlightRule.MatchRange> matches = rule.findMatches("this is a test string with another test");
+		assertEquals(2, matches.size());
+		assertEquals(10, matches.get(0).start());
+		assertEquals(14, matches.get(0).end());
+		assertEquals(35, matches.get(1).start());
+		assertEquals(39, matches.get(1).end());
+
+		HighlightRule regexRule = new HighlightRule("t.st", "blue", true);
+		matches = regexRule.findMatches("test tast tust");
+		assertEquals(3, matches.size());
+		assertEquals(0, matches.get(0).start());
+		assertEquals(4, matches.get(0).end());
+		assertEquals(5, matches.get(1).start());
+		assertEquals(9, matches.get(1).end());
+		assertEquals(10, matches.get(2).start());
+		assertEquals(14, matches.get(2).end());
+	}
 }

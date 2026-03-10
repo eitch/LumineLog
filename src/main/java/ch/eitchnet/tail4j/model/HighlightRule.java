@@ -97,4 +97,33 @@ public class HighlightRule {
 			return count;
 		}
 	}
+
+	public java.util.List<MatchRange> findMatches(String line) {
+		java.util.List<MatchRange> matches = new java.util.ArrayList<>();
+		if (line == null || line.isEmpty() || pattern == null || pattern.isEmpty()) {
+			return matches;
+		}
+		if (isRegex) {
+			if (compiledPattern == null) {
+				compilePattern();
+			}
+			if (compiledPattern == null)
+				return matches;
+			var matcher = compiledPattern.matcher(line);
+			while (matcher.find()) {
+				matches.add(new MatchRange(matcher.start(), matcher.end()));
+			}
+		} else {
+			int lastIndex = 0;
+			int patternLen = pattern.length();
+			while ((lastIndex = line.indexOf(pattern, lastIndex)) != -1) {
+				matches.add(new MatchRange(lastIndex, lastIndex + patternLen));
+				lastIndex += patternLen;
+			}
+		}
+		return matches;
+	}
+
+	public record MatchRange(int start, int end) {
+	}
 }
