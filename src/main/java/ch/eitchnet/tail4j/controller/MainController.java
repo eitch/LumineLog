@@ -1,9 +1,6 @@
 package ch.eitchnet.tail4j.controller;
 
-import ch.eitchnet.tail4j.model.HighlightRule;
-import ch.eitchnet.tail4j.model.LogFileModel;
-import ch.eitchnet.tail4j.model.LogLine;
-import ch.eitchnet.tail4j.model.VirtualLogList;
+import ch.eitchnet.tail4j.model.*;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
@@ -26,19 +23,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.prefs.Preferences;
+import java.util.stream.Collectors;
 
 public class MainController {
 
 	private static final Logger logger = LoggerFactory.getLogger(MainController.class);
 
-	private static final String PREF_LAST_OPEN_FILE = "lastOpenFile";
-	private static final String PREF_LAST_GROUP = "lastGroup";
-	private static final String PREF_GROUPS = "highlightGroups";
-	private static final String PREF_HIGHLIGHT_COUNT = "highlightCount_";
-	private static final String PREF_HIGHLIGHT_PATTERN = "highlightPattern_";
-	private static final String PREF_HIGHLIGHT_COLOR = "highlightColor_";
-	private static final String PREF_HIGHLIGHT_IS_REGEX = "highlightIsRegex_";
+	private final ConfigService configService = new ConfigService();
 
 	@FXML
 	private TabPane tabPane;
@@ -102,8 +93,8 @@ public class MainController {
 	}
 
 	private void loadLastFile() {
-		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-		String lastFile = prefs.get(PREF_LAST_OPEN_FILE, null);
+		Config config = configService.loadConfig();
+		String lastFile = config.getLastOpenFile();
 		if (lastFile != null) {
 			File file = new File(lastFile);
 			if (file.exists()) {
@@ -113,26 +104,31 @@ public class MainController {
 	}
 
 	private void saveHighlights() {
-		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-		logger.info("Saving highlights for group {} to preferences node: {}", currentGroup, prefs.absolutePath());
+		Config currentConfig = configService.loadConfig();
 
-		String groups = String.join(",", highlightGroupComboBox.getItems());
-		prefs.put(PREF_GROUPS, groups);
-		prefs.put(PREF_LAST_GROUP, currentGroup);
-
-		prefs.putInt(PREF_HIGHLIGHT_COUNT + currentGroup, highlightRules.size());
-		for (int i = 0; i < highlightRules.size(); i++) {
-			HighlightRule rule = highlightRules.get(i);
-			prefs.put(PREF_HIGHLIGHT_PATTERN + currentGroup + "_" + i, rule.pattern());
-			prefs.put(PREF_HIGHLIGHT_COLOR + currentGroup + "_" + i, rule.color());
-			prefs.putBoolean(PREF_HIGHLIGHT_IS_REGEX + currentGroup + "_" + i, rule.isRegex());
+		List<HighlightGroup> groups = new ArrayList<>();
+		for (String groupName : highlightGroupComboBox.getItems()) {
+			List<HighlightRule> rules;
+			if (groupName.equals(currentGroup)) {
+				rules = new ArrayList<>(highlightRules);
+			} else {
+				// Keep existing rules for other groups
+				rules = currentConfig.getHighlightGroups().stream()
+						.filter(g -> g.getName().equals(groupName))
+						.findFirst()
+						.map(HighlightGroup::getRules)
+						.orElse(new ArrayList<>());
+			}
+			groups.add(new HighlightGroup(groupName, rules));
 		}
 
-		try {
-			prefs.flush();
-		} catch (Exception e) {
-			logger.error("Failed to flush preferences", e);
-		}
+		Config newConfig = new Config(
+				getActiveTabState() != null ? getActiveTabState().file.getAbsolutePath() : currentConfig.getLastOpenFile(),
+				currentGroup,
+				groups
+		);
+
+		configService.saveConfig(newConfig);
 	}
 
 	private boolean ignoreGroupChange = false;
@@ -140,54 +136,32 @@ public class MainController {
 	private void loadHighlights() {
 		ignoreGroupChange = true;
 		try {
-			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-			logger.info("Loading highlights from preferences node: {}", prefs.absolutePath());
+			Config config = configService.loadConfig();
+			logger.info("Loading highlights from JSON config");
 
 			if (currentGroup == null || currentGroup.isEmpty()) {
-				currentGroup = prefs.get(PREF_LAST_GROUP, "Default");
+				currentGroup = config.getLastGroup();
+				if (currentGroup == null) currentGroup = "Default";
 			}
 
-			String groupsStr = prefs.get(PREF_GROUPS, this.currentGroup);
-			String[] groups = groupsStr.split(",");
-			highlightGroupComboBox.getItems().setAll(groups);
+			List<String> groupNames = config.getHighlightGroups().stream()
+					.map(HighlightGroup::getName)
+					.collect(Collectors.toList());
 
-			if (highlightGroupComboBox.getItems().isEmpty()) {
-				highlightGroupComboBox.getItems().add("Default");
+			if (groupNames.isEmpty()) {
+				groupNames.add("Default");
 				currentGroup = "Default";
 			}
+
+			highlightGroupComboBox.getItems().setAll(groupNames);
 			highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
-			int count = prefs.getInt(PREF_HIGHLIGHT_COUNT + currentGroup, 0);
-
-			// Migration: if no highlights in currentGroup, check old keys
-			if (count == 0 && currentGroup.equals("Default")) {
-				count = prefs.getInt("highlightCount", 0);
-				if (count > 0) {
-					logger.info("Migrating highlights from old format...");
-					highlightRules.clear();
-					for (int i = 0; i < count; i++) {
-						String pattern = prefs.get("highlightPattern_" + i, null);
-						String color = prefs.get("highlightColor_" + i, null);
-						boolean isRegex = prefs.getBoolean("highlightIsRegex_" + i, false);
-						if (pattern != null && color != null) {
-							highlightRules.add(new HighlightRule(pattern, color, isRegex));
-						}
-					}
-					saveHighlights();
-					updateHighlightsBar();
-					return;
-				}
-			}
-
 			highlightRules.clear();
-			for (int i = 0; i < count; i++) {
-				String pattern = prefs.get(PREF_HIGHLIGHT_PATTERN + currentGroup + "_" + i, null);
-				String color = prefs.get(PREF_HIGHLIGHT_COLOR + currentGroup + "_" + i, null);
-				boolean isRegex = prefs.getBoolean(PREF_HIGHLIGHT_IS_REGEX + currentGroup + "_" + i, false);
-				if (pattern != null && color != null) {
-					highlightRules.add(new HighlightRule(pattern, color, isRegex));
-				}
-			}
+			config.getHighlightGroups().stream()
+					.filter(g -> g.getName().equals(currentGroup))
+					.findFirst()
+					.ifPresent(g -> highlightRules.addAll(g.getRules()));
+
 			updateHighlightsBar();
 		} finally {
 			ignoreGroupChange = false;
@@ -280,26 +254,6 @@ public class MainController {
 
 			saveHighlights();
 
-			// Move highlights in preferences
-			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-			int count = prefs.getInt(PREF_HIGHLIGHT_COUNT + oldGroup, 0);
-			prefs.putInt(PREF_HIGHLIGHT_COUNT + newGroup, count);
-			for (int i = 0; i < count; i++) {
-				String pattern = prefs.get(PREF_HIGHLIGHT_PATTERN + oldGroup + "_" + i, "");
-				String color = prefs.get(PREF_HIGHLIGHT_COLOR + oldGroup + "_" + i, "");
-				boolean isRegex = prefs.getBoolean(PREF_HIGHLIGHT_IS_REGEX + oldGroup + "_" + i, false);
-
-				prefs.put(PREF_HIGHLIGHT_PATTERN + newGroup + "_" + i, pattern);
-				prefs.put(PREF_HIGHLIGHT_COLOR + newGroup + "_" + i, color);
-				prefs.putBoolean(PREF_HIGHLIGHT_IS_REGEX + newGroup + "_" + i, isRegex);
-
-				// Remove old keys
-				prefs.remove(PREF_HIGHLIGHT_PATTERN + oldGroup + "_" + i);
-				prefs.remove(PREF_HIGHLIGHT_COLOR + oldGroup + "_" + i);
-				prefs.remove(PREF_HIGHLIGHT_IS_REGEX + oldGroup + "_" + i);
-			}
-			prefs.remove(PREF_HIGHLIGHT_COUNT + oldGroup);
-
 			ignoreGroupChange = true;
 			try {
 				int index = highlightGroupComboBox.getItems().indexOf(oldGroup);
@@ -325,16 +279,6 @@ public class MainController {
 		alert.setHeaderText("Delete highlight group '" + groupToDelete + "'?");
 		alert.setContentText("This will remove all highlights in this group.");
 		if (alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
-			// Remove from preferences
-			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-			int count = prefs.getInt(PREF_HIGHLIGHT_COUNT + groupToDelete, 0);
-			for (int i = 0; i < count; i++) {
-				prefs.remove(PREF_HIGHLIGHT_PATTERN + groupToDelete + "_" + i);
-				prefs.remove(PREF_HIGHLIGHT_COLOR + groupToDelete + "_" + i);
-				prefs.remove(PREF_HIGHLIGHT_IS_REGEX + groupToDelete + "_" + i);
-			}
-			prefs.remove(PREF_HIGHLIGHT_COUNT + groupToDelete);
-
 			ignoreGroupChange = true;
 			try {
 				highlightGroupComboBox.getItems().remove(groupToDelete);
@@ -394,8 +338,7 @@ public class MainController {
 			refreshLogView(state);
 			startTailing(state);
 
-			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-			prefs.put(PREF_LAST_OPEN_FILE, file.getAbsolutePath());
+			saveHighlights();
 		} catch (IOException e) {
 			showError("Could not open file: " + e.getMessage());
 		}
@@ -419,7 +362,7 @@ public class MainController {
 							setStyle("");
 							for (HighlightRule rule : highlightRules) {
 								if (rule.matches(item.content())) {
-									String color = rule.color();
+									String color = rule.getColor();
 									setStyle("-fx-background-color: " + color + ";");
 									break;
 								}
@@ -537,11 +480,11 @@ public class MainController {
 					HBox highlightTag = new HBox(5);
 					highlightTag.setAlignment(Pos.CENTER_LEFT);
 					String baseStyle = "-fx-background-color: "
-							+ rule.color()
+							+ rule.getColor()
 							+ "; -fx-padding: 8 12 8 12; -fx-background-radius: 4; -fx-cursor: hand; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 3, 0, 0, 1);";
 					highlightTag.setStyle(baseStyle);
 
-					Label label = new Label(rule.pattern() + " (" + count + ")");
+					Label label = new Label(rule.getPattern() + " (" + count + ")");
 					label.setStyle("-fx-text-fill: black; -fx-font-weight: bold;");
 					HBox.setHgrow(label, javafx.scene.layout.Priority.ALWAYS);
 
@@ -607,7 +550,7 @@ public class MainController {
 					Alert alert = new Alert(Alert.AlertType.INFORMATION);
 					alert.setTitle("No Occurrences");
 					alert.setHeaderText(null);
-					alert.setContentText("No occurrences found for highlight rule: " + rule.pattern());
+					alert.setContentText("No occurrences found for highlight rule: " + rule.getPattern());
 					alert.showAndWait();
 					return;
 				}
@@ -626,7 +569,7 @@ public class MainController {
 				});
 
 				Stage stage = new Stage();
-				stage.setTitle("Occurrences for: " + rule.pattern());
+				stage.setTitle("Occurrences for: " + rule.getPattern());
 
 				listView.setOnMouseClicked(event -> {
 					if (event.getClickCount() == 2) {
@@ -655,6 +598,7 @@ public class MainController {
 
 	@FXML
 	private void handleExit() {
+		saveHighlights();
 		for (Tab tab : tabPane.getTabs()) {
 			TabState state = (TabState) tab.getUserData();
 			if (state != null) {

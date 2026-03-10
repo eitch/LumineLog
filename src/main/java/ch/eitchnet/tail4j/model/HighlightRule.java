@@ -2,7 +2,41 @@ package ch.eitchnet.tail4j.model;
 
 import java.util.regex.Pattern;
 
-public record HighlightRule(String pattern, String color, boolean isRegex) {
+public class HighlightRule {
+	private String pattern;
+	private String color;
+	private boolean isRegex;
+
+	public HighlightRule(String pattern, String color, boolean isRegex) {
+		this.pattern = pattern;
+		this.color = color;
+		this.isRegex = isRegex;
+	}
+
+	public String getPattern() {
+		return pattern;
+	}
+
+	public void setPattern(String pattern) {
+		this.pattern = pattern;
+	}
+
+	public String getColor() {
+		return color;
+	}
+
+	public void setColor(String color) {
+		this.color = color;
+	}
+
+	public boolean isIsRegex() {
+		return isRegex;
+	}
+
+	public void setIsRegex(boolean isRegex) {
+		this.isRegex = isRegex;
+	}
+
 	public boolean matches(String line) {
 		if (isRegex) {
 			try {
