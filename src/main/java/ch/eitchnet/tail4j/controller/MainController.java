@@ -29,6 +29,10 @@ import java.util.prefs.Preferences;
 public class MainController {
 
 	private static final String PREF_LAST_OPEN_FILE = "lastOpenFile";
+	private static final String PREF_HIGHLIGHT_COUNT = "highlightCount";
+	private static final String PREF_HIGHLIGHT_PATTERN = "highlightPattern_";
+	private static final String PREF_HIGHLIGHT_COLOR = "highlightColor_";
+	private static final String PREF_HIGHLIGHT_IS_REGEX = "highlightIsRegex_";
 
 	@FXML
 	private TabPane tabPane;
@@ -72,6 +76,7 @@ public class MainController {
 	@FXML
 	public void initialize() {
 		highlightColorPicker.setValue(Color.RED);
+		loadHighlights();
 		tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
 			if (newTab != null) {
 				TabState state = (TabState) newTab.getUserData();
@@ -94,6 +99,32 @@ public class MainController {
 				openFile(file);
 			}
 		}
+	}
+
+	private void saveHighlights() {
+		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+		prefs.putInt(PREF_HIGHLIGHT_COUNT, highlightRules.size());
+		for (int i = 0; i < highlightRules.size(); i++) {
+			HighlightRule rule = highlightRules.get(i);
+			prefs.put(PREF_HIGHLIGHT_PATTERN + i, rule.pattern());
+			prefs.put(PREF_HIGHLIGHT_COLOR + i, rule.color());
+			prefs.putBoolean(PREF_HIGHLIGHT_IS_REGEX + i, rule.isRegex());
+		}
+	}
+
+	private void loadHighlights() {
+		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+		int count = prefs.getInt(PREF_HIGHLIGHT_COUNT, 0);
+		highlightRules.clear();
+		for (int i = 0; i < count; i++) {
+			String pattern = prefs.get(PREF_HIGHLIGHT_PATTERN + i, null);
+			String color = prefs.get(PREF_HIGHLIGHT_COLOR + i, null);
+			boolean isRegex = prefs.getBoolean(PREF_HIGHLIGHT_IS_REGEX + i, false);
+			if (pattern != null && color != null) {
+				highlightRules.add(new HighlightRule(pattern, color, isRegex));
+			}
+		}
+		updateHighlightsBar();
 	}
 
 	@FXML
@@ -232,6 +263,7 @@ public class MainController {
 			Color color = highlightColorPicker.getValue();
 			String webColor = toWebColor(color);
 			highlightRules.add(new HighlightRule(pattern, webColor, regexCheckBox.isSelected()));
+			saveHighlights();
 			updateHighlightsBar();
 			TabState state = getActiveTabState();
 			if (state != null) {
@@ -243,6 +275,7 @@ public class MainController {
 	@FXML
 	private void handleClearHighlights() {
 		highlightRules.clear();
+		saveHighlights();
 		updateHighlightsBar();
 		TabState state = getActiveTabState();
 		if (state != null) {
@@ -302,6 +335,7 @@ public class MainController {
 							"-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
 					dismissBtn.setOnAction(_ -> {
 						highlightRules.remove(rule);
+						saveHighlights();
 						updateHighlightsBar();
 						TabState currentState = getActiveTabState();
 						if (currentState != null) {
