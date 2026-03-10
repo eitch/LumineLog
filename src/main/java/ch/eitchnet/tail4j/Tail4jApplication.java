@@ -19,7 +19,7 @@ public class Tail4jApplication extends Application {
 		stage.show();
 	}
 
-	public static void main(String[] args) {
+	void main() {
 		launch();
 	}
 }
