@@ -6,7 +6,7 @@ import java.util.List;
 public class Config {
 	private String lastOpenFile;
 	private String lastGroup;
-	private List<HighlightGroup> highlightGroups = new ArrayList<>();
+	private List<HighlightGroup> highlightGroups;
 
 	public Config(String lastOpenFile, String lastGroup, List<HighlightGroup> highlightGroups) {
 		this.lastOpenFile = lastOpenFile;
