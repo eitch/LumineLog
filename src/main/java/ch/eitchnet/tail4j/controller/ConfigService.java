@@ -2,6 +2,7 @@ package ch.eitchnet.tail4j.controller;
 
 import ch.eitchnet.tail4j.model.Config;
 import ch.eitchnet.tail4j.model.HighlightGroup;
+import ch.eitchnet.tail4j.model.HighlightRule;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import org.slf4j.Logger;
@@ -13,7 +14,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.List;
 
 public class ConfigService {
@@ -79,7 +79,12 @@ public class ConfigService {
 		return path;
 	}
 
-	private Config createDefaultConfig() {
-		return new Config(null, "Default", List.of(new HighlightGroup("Default", new ArrayList<>())));
+	Config createDefaultConfig() {
+		List<HighlightRule> defaultRules = List.of(new HighlightRule("INFO", "#008000", false),
+				new HighlightRule("WARN", "#ffa500", false), new HighlightRule("ERROR", "#ff0000", false),
+				new HighlightRule("Exception", "#8b0000", false));
+		HighlightGroup defaultGroup = new HighlightGroup("Default", List.of());
+		HighlightGroup sl4jGroup = new HighlightGroup("Slf4j", defaultRules);
+		return new Config(null, "Default", List.of(defaultGroup, sl4jGroup));
 	}
 }

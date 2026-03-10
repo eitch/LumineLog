@@ -90,7 +90,7 @@ public class MainController {
 	@FXML
 	public void initialize() {
 		highlightColorPicker.setValue(Color.valueOf("#ff8080"));
-		loadHighlights();
+		loadHighlights(true);
 		highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
 		tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
@@ -146,7 +146,7 @@ public class MainController {
 
 	private boolean ignoreGroupChange = false;
 
-	private void loadHighlights() {
+	private void loadHighlights(boolean updateGroups) {
 		ignoreGroupChange = true;
 		try {
 			Config config = configService.loadConfig();
@@ -158,19 +158,21 @@ public class MainController {
 					currentGroup = "Default";
 			}
 
-			List<String> groupNames = config
-					.getHighlightGroups()
-					.stream()
-					.map(HighlightGroup::getName)
-					.collect(Collectors.toList());
+			if (updateGroups) {
+				List<String> groupNames = config
+						.getHighlightGroups()
+						.stream()
+						.map(HighlightGroup::getName)
+						.collect(Collectors.toList());
 
-			if (groupNames.isEmpty()) {
-				groupNames.add("Default");
-				currentGroup = "Default";
+				if (groupNames.isEmpty()) {
+					groupNames.add("Default");
+					currentGroup = "Default";
+				}
+
+				highlightGroupComboBox.getItems().setAll(groupNames);
+				highlightGroupComboBox.getSelectionModel().select(currentGroup);
 			}
-
-			highlightGroupComboBox.getItems().setAll(groupNames);
-			highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
 			highlightRules.clear();
 			config
@@ -202,7 +204,7 @@ public class MainController {
 		if (!highlightGroupComboBox.getItems().contains(currentGroup)) {
 			highlightGroupComboBox.getItems().add(currentGroup);
 		}
-		loadHighlights();
+		loadHighlights(false);
 
 		TabState state = getActiveTabState();
 		if (state != null) {
