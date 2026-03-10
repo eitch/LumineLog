@@ -71,7 +71,7 @@ public class MainController {
 
 	@FXML
 	public void initialize() {
-		highlightColorPicker.setValue(Color.YELLOW);
+		highlightColorPicker.setValue(Color.RED);
 		tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
 			if (newTab != null) {
 				TabState state = (TabState) newTab.getUserData();
@@ -114,10 +114,16 @@ public class MainController {
 
 			Tab tab = new Tab();
 			Label tabLabel = new Label(file.getName());
-			tab.setGraphic(tabLabel);
+			Button closeBtn = new Button("×");
+			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
+			closeBtn.setOnAction(_ -> tabPane.getTabs().remove(tab));
+			HBox graphic = new HBox(tabLabel, closeBtn);
+			graphic.setAlignment(Pos.CENTER);
+			tab.setGraphic(graphic);
+			tab.setClosable(false);
 			tab.setContent(logListView);
 
-			tabLabel.setOnMouseReleased(event -> {
+			graphic.setOnMouseReleased(event -> {
 				if (event.getButton() == MouseButton.MIDDLE) {
 					tabPane.getTabs().remove(tab);
 				}
