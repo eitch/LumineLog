@@ -113,10 +113,35 @@ public class LogFileModel implements AutoCloseable {
 	}
 
 	public synchronized void iterateLines(LineProcessor processor) throws IOException {
+		long fileSize = raf.length();
+		if (fileSize == 0)
+			return;
+
+		ByteBuffer buffer = ByteBuffer.allocate(65536);
+		FileChannel channel = raf.getChannel();
+
 		for (int i = 0; i < lineOffsets.size(); i++) {
 			long start = lineOffsets.get(i);
-			long end = (i + 1 < lineOffsets.size()) ? lineOffsets.get(i + 1) : -1;
-			String line = getLine(raf, start, end);
+			long end = (i + 1 < lineOffsets.size()) ? lineOffsets.get(i + 1) : fileSize;
+			long length = end - start;
+
+			if (length <= 0) {
+				if (!processor.process("", i))
+					break;
+				continue;
+			}
+
+			byte[] bytes = new byte[(int) length];
+			channel.read(ByteBuffer.wrap(bytes), start);
+
+			String line = new String(bytes);
+			if (line.endsWith("\n")) {
+				line = line.substring(0, line.length() - 1);
+			}
+			if (line.endsWith("\r")) {
+				line = line.substring(0, line.length() - 1);
+			}
+
 			if (!processor.process(line, i)) {
 				break;
 			}
