@@ -183,8 +183,8 @@ public class MainController {
 			return;
 		}
 
-		currentGroup = newGroup;
 		saveHighlights();
+		currentGroup = newGroup;
 		if (!highlightGroupComboBox.getItems().contains(currentGroup)) {
 			highlightGroupComboBox.getItems().add(currentGroup);
 		}
@@ -256,8 +256,6 @@ public class MainController {
 				return;
 			}
 
-			saveHighlights();
-
 			ignoreGroupChange = true;
 			try {
 				int index = highlightGroupComboBox.getItems().indexOf(oldGroup);
@@ -288,7 +286,6 @@ public class MainController {
 				highlightGroupComboBox.getItems().remove(groupToDelete);
 				currentGroup = "Default";
 				highlightGroupComboBox.getSelectionModel().select(currentGroup);
-				loadHighlights();
 				saveHighlights();
 			} finally {
 				ignoreGroupChange = false;
