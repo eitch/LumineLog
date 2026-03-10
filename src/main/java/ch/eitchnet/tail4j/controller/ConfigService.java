@@ -80,9 +80,9 @@ public class ConfigService {
 	}
 
 	Config createDefaultConfig() {
-		List<HighlightRule> defaultRules = List.of(new HighlightRule("INFO", "#008000", false),
-				new HighlightRule("WARN", "#ffa500", false), new HighlightRule("ERROR", "#ff0000", false),
-				new HighlightRule("Exception", "#8b0000", false));
+		List<HighlightRule> defaultRules = List.of(new HighlightRule("INFO", "#b3ccff", false),
+				new HighlightRule("WARN", "#ff9980", false), new HighlightRule("ERROR", "#ff0000", false),
+				new HighlightRule("Exception", "#ff00ff", false));
 		HighlightGroup defaultGroup = new HighlightGroup("Default", List.of());
 		HighlightGroup sl4jGroup = new HighlightGroup("Slf4j", defaultRules);
 		return new Config(null, "Default", List.of(defaultGroup, sl4jGroup));

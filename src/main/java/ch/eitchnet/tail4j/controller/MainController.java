@@ -440,20 +440,6 @@ public class MainController {
 		}
 	}
 
-	@FXML
-	private void handleClearHighlights() {
-		highlightRules.clear();
-		saveHighlights();
-
-		TabState state = getActiveTabState();
-		if (state != null) {
-			state.highlightCounts = null;
-			state.lastCountedLine = 0;
-			state.logListView.refresh();
-		}
-		updateHighlightsBar();
-	}
-
 	private long lastUpdateHighlightsBar = 0;
 	private Thread highlightCounterThread = null;
 
