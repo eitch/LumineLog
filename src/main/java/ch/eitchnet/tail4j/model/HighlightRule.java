@@ -13,11 +13,7 @@ public class HighlightRule {
 		this.color = color;
 		this.isRegex = isRegex;
 		if (isRegex) {
-			try {
-				this.compiledPattern = Pattern.compile(pattern);
-			} catch (Exception e) {
-				this.compiledPattern = null;
-			}
+			compilePattern();
 		}
 	}
 
@@ -28,11 +24,7 @@ public class HighlightRule {
 	public void setPattern(String pattern) {
 		this.pattern = pattern;
 		if (isRegex) {
-			try {
-				this.compiledPattern = Pattern.compile(pattern);
-			} catch (Exception e) {
-				this.compiledPattern = null;
-			}
+			compilePattern();
 		}
 	}
 
@@ -51,18 +43,25 @@ public class HighlightRule {
 	public void setIsRegex(boolean isRegex) {
 		this.isRegex = isRegex;
 		if (isRegex) {
-			try {
-				this.compiledPattern = Pattern.compile(pattern);
-			} catch (Exception e) {
-				this.compiledPattern = null;
-			}
+			compilePattern();
 		} else {
+			this.compiledPattern = null;
+		}
+	}
+
+	private void compilePattern() {
+		try {
+			this.compiledPattern = Pattern.compile(pattern);
+		} catch (Exception e) {
 			this.compiledPattern = null;
 		}
 	}
 
 	public boolean matches(String line) {
 		if (isRegex) {
+			if (compiledPattern == null) {
+				compilePattern();
+			}
 			if (compiledPattern == null)
 				return false;
 			return compiledPattern.matcher(line).find();
@@ -76,6 +75,9 @@ public class HighlightRule {
 			return 0;
 		}
 		if (isRegex) {
+			if (compiledPattern == null) {
+				compilePattern();
+			}
 			if (compiledPattern == null)
 				return 0;
 			int count = 0;
