@@ -4,6 +4,7 @@ import java.util.regex.Pattern;
 
 public class HighlightRule {
 	private String pattern;
+	private transient Pattern compiledPattern;
 	private String color;
 	private boolean isRegex;
 
@@ -11,6 +12,13 @@ public class HighlightRule {
 		this.pattern = pattern;
 		this.color = color;
 		this.isRegex = isRegex;
+		if (isRegex) {
+			try {
+				this.compiledPattern = Pattern.compile(pattern);
+			} catch (Exception e) {
+				this.compiledPattern = null;
+			}
+		}
 	}
 
 	public String getPattern() {
@@ -19,6 +27,13 @@ public class HighlightRule {
 
 	public void setPattern(String pattern) {
 		this.pattern = pattern;
+		if (isRegex) {
+			try {
+				this.compiledPattern = Pattern.compile(pattern);
+			} catch (Exception e) {
+				this.compiledPattern = null;
+			}
+		}
 	}
 
 	public String getColor() {
@@ -35,15 +50,22 @@ public class HighlightRule {
 
 	public void setIsRegex(boolean isRegex) {
 		this.isRegex = isRegex;
+		if (isRegex) {
+			try {
+				this.compiledPattern = Pattern.compile(pattern);
+			} catch (Exception e) {
+				this.compiledPattern = null;
+			}
+		} else {
+			this.compiledPattern = null;
+		}
 	}
 
 	public boolean matches(String line) {
 		if (isRegex) {
-			try {
-				return Pattern.compile(pattern).matcher(line).find();
-			} catch (Exception e) {
+			if (compiledPattern == null)
 				return false;
-			}
+			return compiledPattern.matcher(line).find();
 		} else {
 			return line.contains(pattern);
 		}
@@ -54,22 +76,21 @@ public class HighlightRule {
 			return 0;
 		}
 		if (isRegex) {
-			try {
-				int count = 0;
-				var matcher = Pattern.compile(pattern).matcher(line);
-				while (matcher.find()) {
-					count++;
-				}
-				return count;
-			} catch (Exception e) {
+			if (compiledPattern == null)
 				return 0;
+			int count = 0;
+			var matcher = compiledPattern.matcher(line);
+			while (matcher.find()) {
+				count++;
 			}
+			return count;
 		} else {
 			int count = 0;
 			int lastIndex = 0;
+			int patternLen = pattern.length();
 			while ((lastIndex = line.indexOf(pattern, lastIndex)) != -1) {
 				count++;
-				lastIndex += pattern.length();
+				lastIndex += patternLen;
 			}
 			return count;
 		}

@@ -57,6 +57,8 @@ public class MainController {
 		VirtualLogList logItems;
 		Timer tailTimer;
 		ListView<LogLine> logListView;
+		int[] highlightCounts;
+		int lastCountedLine = 0;
 
 		TabState(File file, LogFileModel logModel, VirtualLogList logItems, ListView<LogLine> logListView) {
 			this.file = file;
@@ -69,6 +71,13 @@ public class MainController {
 			if (tailTimer != null) {
 				tailTimer.cancel();
 				tailTimer = null;
+			}
+			if (logModel != null) {
+				try {
+					logModel.close();
+				} catch (IOException e) {
+					// ignore
+				}
 			}
 		}
 	}
@@ -313,7 +322,11 @@ public class MainController {
 			Label tabLabel = new Label(file.getName());
 			Button closeBtn = new Button("×");
 			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
-			closeBtn.setOnAction(_ -> tabPane.getTabs().remove(tab));
+			TabState state = new TabState(file, logModel, logItems, logListView);
+			closeBtn.setOnAction(_ -> {
+				state.stopTailing();
+				tabPane.getTabs().remove(tab);
+			});
 			HBox graphic = new HBox(tabLabel, closeBtn);
 			graphic.setAlignment(Pos.CENTER);
 			tab.setGraphic(graphic);
@@ -322,10 +335,10 @@ public class MainController {
 
 			graphic.setOnMouseReleased(event -> {
 				if (event.getButton() == MouseButton.MIDDLE) {
+					state.stopTailing();
 					tabPane.getTabs().remove(tab);
 				}
 			});
-			TabState state = new TabState(file, logModel, logItems, logListView);
 			tab.setUserData(state);
 			tab.setOnClosed(_ -> {
 				logger.info("Closing tab for file {}", file.getAbsolutePath());
@@ -430,11 +443,14 @@ public class MainController {
 			String webColor = toWebColor(color);
 			highlightRules.add(new HighlightRule(pattern, webColor, regexCheckBox.isSelected()));
 			saveHighlights();
-			updateHighlightsBar();
+
 			TabState state = getActiveTabState();
 			if (state != null) {
+				state.highlightCounts = null;
+				state.lastCountedLine = 0;
 				state.logListView.refresh();
 			}
+			updateHighlightsBar();
 		}
 	}
 
@@ -442,41 +458,68 @@ public class MainController {
 	private void handleClearHighlights() {
 		highlightRules.clear();
 		saveHighlights();
-		updateHighlightsBar();
+
 		TabState state = getActiveTabState();
 		if (state != null) {
+			state.highlightCounts = null;
+			state.lastCountedLine = 0;
 			state.logListView.refresh();
 		}
+		updateHighlightsBar();
 	}
+
+	private long lastUpdateHighlightsBar = 0;
 
 	private void updateHighlightsBar() {
 		TabState state = getActiveTabState();
 		if (state == null || state.logModel == null || highlightRules.isEmpty()) {
 			highlightsPane.getChildren().clear();
+			if (state != null) {
+				state.highlightCounts = null;
+				state.lastCountedLine = 0;
+			}
 			return;
 		}
 
+		long now = System.currentTimeMillis();
+		if (now - lastUpdateHighlightsBar < 500) {
+			return;
+		}
+		lastUpdateHighlightsBar = now;
+
 		List<HighlightRule> currentRules = new ArrayList<>(highlightRules);
 		new Thread(() -> {
-			int[] counts = new int[currentRules.size()];
-			try {
-				state.logModel.iterateLines((line, _) -> {
-					if (line == null)
-						return true;
-					for (int j = 0; j < currentRules.size(); j++) {
-						counts[j] += currentRules.get(j).countOccurrences(line);
-					}
-					return true;
-				});
-			} catch (IOException e) {
-				// ignore
+			int numRules = currentRules.size();
+			if (state.highlightCounts == null || state.highlightCounts.length != numRules) {
+				state.highlightCounts = new int[numRules];
+				state.lastCountedLine = 0;
 			}
 
+			int startLine = state.lastCountedLine;
+			int totalLines = state.logModel.getLineCount();
+
+			if (startLine < totalLines) {
+				try {
+					for (int i = startLine; i < totalLines; i++) {
+						String line = state.logModel.getLine(i);
+						if (line != null) {
+							for (int j = 0; j < numRules; j++) {
+								state.highlightCounts[j] += currentRules.get(j).countOccurrences(line);
+							}
+						}
+					}
+					state.lastCountedLine = totalLines;
+				} catch (IOException e) {
+					// ignore
+				}
+			}
+
+			final int[] finalCounts = state.highlightCounts.clone();
 			Platform.runLater(() -> {
 				highlightsPane.getChildren().clear();
 				for (int i = 0; i < currentRules.size(); i++) {
 					HighlightRule rule = currentRules.get(i);
-					int count = counts[i];
+					int count = finalCounts[i];
 
 					HBox highlightTag = new HBox(5);
 					highlightTag.setAlignment(Pos.CENTER_LEFT);
@@ -502,11 +545,13 @@ public class MainController {
 					dismissBtn.setOnAction(_ -> {
 						highlightRules.remove(rule);
 						saveHighlights();
-						updateHighlightsBar();
 						TabState currentState = getActiveTabState();
 						if (currentState != null) {
+							currentState.highlightCounts = null;
+							currentState.lastCountedLine = 0;
 							currentState.logListView.refresh();
 						}
+						updateHighlightsBar();
 					});
 
 					highlightTag.getChildren().addAll(label, dismissBtn);
