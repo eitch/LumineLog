@@ -113,7 +113,9 @@ public class MainController {
 				rules = new ArrayList<>(highlightRules);
 			} else {
 				// Keep existing rules for other groups
-				rules = currentConfig.getHighlightGroups().stream()
+				rules = currentConfig
+						.getHighlightGroups()
+						.stream()
 						.filter(g -> g.getName().equals(groupName))
 						.findFirst()
 						.map(HighlightGroup::getRules)
@@ -122,11 +124,8 @@ public class MainController {
 			groups.add(new HighlightGroup(groupName, rules));
 		}
 
-		Config newConfig = new Config(
-				getActiveTabState() != null ? getActiveTabState().file.getAbsolutePath() : currentConfig.getLastOpenFile(),
-				currentGroup,
-				groups
-		);
+		Config newConfig = new Config(getActiveTabState() != null ? getActiveTabState().file.getAbsolutePath() :
+				currentConfig.getLastOpenFile(), currentGroup, groups);
 
 		configService.saveConfig(newConfig);
 	}
@@ -141,10 +140,13 @@ public class MainController {
 
 			if (currentGroup == null || currentGroup.isEmpty()) {
 				currentGroup = config.getLastGroup();
-				if (currentGroup == null) currentGroup = "Default";
+				if (currentGroup == null)
+					currentGroup = "Default";
 			}
 
-			List<String> groupNames = config.getHighlightGroups().stream()
+			List<String> groupNames = config
+					.getHighlightGroups()
+					.stream()
 					.map(HighlightGroup::getName)
 					.collect(Collectors.toList());
 
@@ -157,7 +159,9 @@ public class MainController {
 			highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
 			highlightRules.clear();
-			config.getHighlightGroups().stream()
+			config
+					.getHighlightGroups()
+					.stream()
 					.filter(g -> g.getName().equals(currentGroup))
 					.findFirst()
 					.ifPresent(g -> highlightRules.addAll(g.getRules()));
@@ -213,9 +217,9 @@ public class MainController {
 			saveHighlights();
 			ignoreGroupChange = true;
 			try {
+				currentGroup = newGroup;
 				highlightGroupComboBox.getItems().add(newGroup);
 				highlightGroupComboBox.getSelectionModel().select(newGroup);
-				currentGroup = newGroup;
 				highlightRules.clear();
 				updateHighlightsBar();
 				saveHighlights();
