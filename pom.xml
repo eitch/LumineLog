@@ -6,12 +6,44 @@
 
     <groupId>ch.eitchnet</groupId>
     <artifactId>Tail4j</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>0.1.0-SNAPSHOT</version>
     <name>Tail4j</name>
+    <description>A JavaFX Log Viewer</description>
+    <url>https://github.com/eitch/Tail4j</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <developers>
+        <developer>
+            <id>eitch</id>
+            <name>Robert von Burg</name>
+            <email>eitch@eitchnet.ch</email>
+        </developer>
+    </developers>
+
+    <licenses>
+        <license>
+            <name>Apache-2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git:https://github.com/eitch/Tail4j.git</connection>
+        <developerConnection>scm:git:ssh://github.com/eitch/Tail4j.git</developerConnection>
+        <url>https://github.com/eitch/Tail4j</url>
+        <tag>HEAD</tag>
+    </scm>
 
     <properties>
+        <jarFinalName>${project.artifactId}</jarFinalName>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.version>5.12.1</junit.version>
+
+        <!-- Azul Zulu JRE download coordinates (adjust as needed) -->
+        <!-- These URLs can be updated to newer builds; see https://www.azul.com/downloads/?package=jre -->
+        <zulu.linux.url>https://cdn.azul.com/zulu/bin/zulu25.30.17-ca-fx-jre25.0.1-linux_x64.tar.gz</zulu.linux.url>
+        <zulu.windows.url>https://cdn.azul.com/zulu/bin/zulu25.30.17-ca-fx-jre25.0.1-win_x64.zip</zulu.windows.url>
     </properties>
 
     <dependencies>
@@ -67,26 +99,183 @@
                     <target>25</target>
                 </configuration>
             </plugin>
+
+            <!--            <plugin>-->
+            <!--                <groupId>org.openjfx</groupId>-->
+            <!--                <artifactId>javafx-maven-plugin</artifactId>-->
+            <!--                <version>0.0.8</version>-->
+            <!--                <executions>-->
+            <!--                    <execution>-->
+            <!--                        &lt;!&ndash; Default configuration for running with: mvn clean javafx:run &ndash;&gt;-->
+            <!--                        <id>default-cli</id>-->
+            <!--                        <configuration>-->
+            <!--                            <mainClass>ch.eitchnet.tail4j/ch.eitchnet.tail4j.Tail4jApplication</mainClass>-->
+            <!--                            <launcher>Tail4j</launcher>-->
+            <!--                            <jlinkZipName>Tail4j-${project.version}</jlinkZipName>-->
+            <!--                            <jlinkImageName>Tail4j</jlinkImageName>-->
+            <!--                            <noManPages>true</noManPages>-->
+            <!--                            <stripDebug>true</stripDebug>-->
+            <!--                            <noHeaderFiles>true</noHeaderFiles>-->
+            <!--                        </configuration>-->
+            <!--                    </execution>-->
+            <!--                </executions>-->
+            <!--            </plugin>-->
+
             <plugin>
-                <groupId>org.openjfx</groupId>
-                <artifactId>javafx-maven-plugin</artifactId>
-                <version>0.0.8</version>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
                 <executions>
                     <execution>
-                        <!-- Default configuration for running with: mvn clean javafx:run -->
-                        <id>default-cli</id>
+                        <id>copy-dependencies</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
                         <configuration>
-                            <mainClass>ch.eitchnet.tail4j/ch.eitchnet.tail4j.Tail4jApplication</mainClass>
-                            <launcher>app</launcher>
-                            <jlinkZipName>app</jlinkZipName>
-                            <jlinkImageName>app</jlinkImageName>
-                            <noManPages>true</noManPages>
-                            <stripDebug>true</stripDebug>
-                            <noHeaderFiles>true</noHeaderFiles>
+                            <outputDirectory>
+                                ${project.build.directory}/libs
+                            </outputDirectory>
+                            <!--                            <excludeArtifactIds>jakarta.mail-api,jakarta.mail,javax.mail-api,javax.mail,activation</excludeArtifactIds>-->
+                            <includeScope>compile</includeScope>
                         </configuration>
                     </execution>
                 </executions>
             </plugin>
+
         </plugins>
     </build>
+
+    <profiles>
+
+        <profile>
+            <id>release</id>
+
+            <build>
+
+                <finalName>${jarFinalName}</finalName>
+
+                <plugins>
+
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-dependencies</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>copy-dependencies</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>
+                                        ${project.build.directory}/libs
+                                    </outputDirectory>
+                                    <excludeArtifactIds>jakarta.mail-api,jakarta.mail,javax.mail-api,javax.mail,activation</excludeArtifactIds>
+                                    <includeScope>compile</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <configuration>
+                            <archive>
+                                <manifest>
+                                    <addClasspath>true</addClasspath>
+                                    <classpathPrefix>libs/</classpathPrefix>
+                                    <mainClass>ch.eitchnet.tail4j.Tail4jApplication</mainClass>
+                                    <useUniqueVersions>false</useUniqueVersions>
+                                </manifest>
+                            </archive>
+                        </configuration>
+                    </plugin>
+
+                    <!-- Download JavaFX SDKs for Linux and Windows x64 during package phase -->
+                    <plugin>
+                        <groupId>com.googlecode.maven-download-plugin</groupId>
+                        <artifactId>download-maven-plugin</artifactId>
+                        <version>1.7.1</version>
+                        <executions>
+                            <execution>
+                                <id>download-zulu-jre-linux-x64</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>wget</goal>
+                                </goals>
+                                <configuration>
+                                    <url>${zulu.linux.url}</url>
+                                    <outputDirectory>${project.build.directory}/runtime/linux-x64</outputDirectory>
+                                    <unpack>true</unpack>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>download-zulu-jre-windows-x64</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>wget</goal>
+                                </goals>
+                                <configuration>
+                                    <url>${zulu.windows.url}</url>
+                                    <outputDirectory>${project.build.directory}/runtime/windows-x64</outputDirectory>
+                                    <unpack>true</unpack>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <executions>
+                            <execution>
+                                <id>linux-x64</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                                <configuration>
+                                    <finalName>${project.artifactId}-${project.version}-linux-x64</finalName>
+                                    <appendAssemblyId>false</appendAssemblyId>
+                                    <descriptors>
+                                        <descriptor>src/assembly/assembly-linux.xml</descriptor>
+                                    </descriptors>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>windows-x64</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>single</goal>
+                                </goals>
+                                <configuration>
+                                    <finalName>${project.artifactId}-${project.version}-windows-x64</finalName>
+                                    <appendAssemblyId>false</appendAssemblyId>
+                                    <descriptors>
+                                        <descriptor>src/assembly/assembly-windows.xml</descriptor>
+                                    </descriptors>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                </plugins>
+
+            </build>
+
+        </profile>
+
+    </profiles>
+
 </project>
