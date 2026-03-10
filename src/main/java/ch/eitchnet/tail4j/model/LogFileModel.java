@@ -10,13 +10,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class LogFileModel implements AutoCloseable {
-	private final Path filePath;
 	private RandomAccessFile raf;
 	private final List<Long> lineOffsets = new ArrayList<>();
 	private long lastProcessedPosition = 0;
 
 	public LogFileModel(Path filePath) throws IOException {
-		this.filePath = filePath;
 		this.raf = new RandomAccessFile(filePath.toFile(), "r");
 		indexFile();
 	}
@@ -112,15 +110,14 @@ public class LogFileModel implements AutoCloseable {
 		return line;
 	}
 
-	public synchronized void iterateLines(LineProcessor processor) throws IOException {
+	public synchronized void iterateLines(int startLine, LineProcessor processor) throws IOException {
 		long fileSize = raf.length();
 		if (fileSize == 0)
 			return;
 
-		ByteBuffer buffer = ByteBuffer.allocate(65536);
 		FileChannel channel = raf.getChannel();
 
-		for (int i = 0; i < lineOffsets.size(); i++) {
+		for (int i = startLine; i < lineOffsets.size(); i++) {
 			long start = lineOffsets.get(i);
 			long end = (i + 1 < lineOffsets.size()) ? lineOffsets.get(i + 1) : fileSize;
 			long length = end - start;
@@ -146,6 +143,10 @@ public class LogFileModel implements AutoCloseable {
 				break;
 			}
 		}
+	}
+
+	public synchronized void iterateLines(LineProcessor processor) throws IOException {
+		iterateLines(0, processor);
 	}
 
 	@Override

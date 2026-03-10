@@ -470,6 +470,7 @@ public class MainController {
 	}
 
 	private long lastUpdateHighlightsBar = 0;
+	private Thread highlightCounterThread = null;
 
 	private void updateHighlightsBar() {
 		TabState state = getActiveTabState();
@@ -488,8 +489,12 @@ public class MainController {
 		}
 		lastUpdateHighlightsBar = now;
 
+		if (highlightCounterThread != null && highlightCounterThread.isAlive()) {
+			highlightCounterThread.interrupt();
+		}
+
 		List<HighlightRule> currentRules = new ArrayList<>(highlightRules);
-		new Thread(() -> {
+		highlightCounterThread = new Thread(() -> {
 			int numRules = currentRules.size();
 			if (state.highlightCounts == null || state.highlightCounts.length != numRules) {
 				state.highlightCounts = new int[numRules];
@@ -501,76 +506,93 @@ public class MainController {
 
 			if (startLine < totalLines) {
 				try {
-					for (int i = startLine; i < totalLines; i++) {
-						String line = state.logModel.getLine(i);
-						if (line != null) {
-							for (int j = 0; j < numRules; j++) {
-								state.highlightCounts[j] += currentRules.get(j).countOccurrences(line);
-							}
+					final int batchSize = 1000;
+					final long updateIntervalMs = 200;
+					final long[] lastUpdate = {System.currentTimeMillis()};
+
+					state.logModel.iterateLines(startLine, (line, lineNumber) -> {
+						if (Thread.currentThread().isInterrupted()) {
+							return false;
 						}
-					}
-					state.lastCountedLine = totalLines;
+
+						for (int j = 0; j < numRules; j++) {
+							state.highlightCounts[j] += currentRules.get(j).countOccurrences(line);
+						}
+						state.lastCountedLine = lineNumber + 1;
+
+						long currentTime = System.currentTimeMillis();
+						if (lineNumber % batchSize == 0 && (currentTime - lastUpdate[0] > updateIntervalMs)) {
+							lastUpdate[0] = currentTime;
+							final int[] intermediateCounts = state.highlightCounts.clone();
+							Platform.runLater(() -> updateHighlightsUI(currentRules, intermediateCounts));
+						}
+						return true;
+					});
 				} catch (IOException e) {
 					// ignore
 				}
 			}
 
 			final int[] finalCounts = state.highlightCounts.clone();
-			Platform.runLater(() -> {
-				highlightsPane.getChildren().clear();
-				for (int i = 0; i < currentRules.size(); i++) {
-					HighlightRule rule = currentRules.get(i);
-					int count = finalCounts[i];
+			Platform.runLater(() -> updateHighlightsUI(currentRules, finalCounts));
+		}, "HighlightCounter");
+		highlightCounterThread.setDaemon(true);
+		highlightCounterThread.start();
+	}
 
-					HBox highlightTag = new HBox(5);
-					highlightTag.setAlignment(Pos.CENTER_LEFT);
-					String baseStyle = "-fx-background-color: "
-							+ rule.getColor()
-							+ "; -fx-padding: 8 12 8 12; -fx-background-radius: 4; -fx-cursor: hand; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 3, 0, 0, 1);";
-					highlightTag.setStyle(baseStyle);
+	private void updateHighlightsUI(List<HighlightRule> currentRules, int[] counts) {
+		highlightsPane.getChildren().clear();
+		for (int i = 0; i < currentRules.size(); i++) {
+			HighlightRule rule = currentRules.get(i);
+			int count = counts[i];
 
-					Label label = new Label(rule.getPattern() + " (" + count + ")");
-					label.setStyle("-fx-text-fill: black; -fx-font-weight: bold;");
-					HBox.setHgrow(label, javafx.scene.layout.Priority.ALWAYS);
+			HBox highlightTag = new HBox(5);
+			highlightTag.setAlignment(Pos.CENTER_LEFT);
+			String baseStyle = "-fx-background-color: "
+					+ rule.getColor()
+					+ "; -fx-padding: 8 12 8 12; -fx-background-radius: 4; -fx-cursor: hand; -fx-effect: dropshadow(three-pass-box, rgba(0,0,0,0.2), 3, 0, 0, 1);";
+			highlightTag.setStyle(baseStyle);
 
-					Button dismissBtn = new Button("×");
-					dismissBtn.setStyle(
-							"-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;");
-					dismissBtn.setTooltip(new Tooltip("Remove highlight"));
-					HBox.setMargin(dismissBtn, new javafx.geometry.Insets(0, -4, 0, 0));
+			Label label = new Label(rule.getPattern() + " (" + count + ")");
+			label.setStyle("-fx-text-fill: black; -fx-font-weight: bold;");
+			HBox.setHgrow(label, javafx.scene.layout.Priority.ALWAYS);
 
-					dismissBtn.setOnMouseEntered(_ -> dismissBtn.setStyle(
-							"-fx-background-color: rgba(255,255,255,0.6); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
-					dismissBtn.setOnMouseExited(_ -> dismissBtn.setStyle(
-							"-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
-					dismissBtn.setOnAction(_ -> {
-						highlightRules.remove(rule);
-						saveHighlights();
-						TabState currentState = getActiveTabState();
-						if (currentState != null) {
-							currentState.highlightCounts = null;
-							currentState.lastCountedLine = 0;
-							currentState.logListView.refresh();
-						}
-						updateHighlightsBar();
-					});
+			Button dismissBtn = new Button("×");
+			dismissBtn.setStyle(
+					"-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;");
+			dismissBtn.setTooltip(new Tooltip("Remove highlight"));
+			HBox.setMargin(dismissBtn, new javafx.geometry.Insets(0, -4, 0, 0));
 
-					highlightTag.getChildren().addAll(label, dismissBtn);
-
-					highlightTag.setOnMouseEntered(_ -> highlightTag.setStyle(baseStyle + "-fx-brightness: 1.1;"));
-					highlightTag.setOnMouseExited(_ -> highlightTag.setStyle(baseStyle));
-
-					highlightTag.setOnMouseClicked(event -> {
-						if (event.getTarget() == dismissBtn)
-							return;
-						showOccurrences(rule);
-					});
-					Tooltip.install(highlightTag, new Tooltip("Click to show all occurrences"));
-
-					highlightsPane.getChildren().add(highlightTag);
+			dismissBtn.setOnMouseEntered(_ -> dismissBtn.setStyle(
+					"-fx-background-color: rgba(255,255,255,0.6); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
+			dismissBtn.setOnMouseExited(_ -> dismissBtn.setStyle(
+					"-fx-background-color: rgba(255,255,255,0.3); -fx-background-radius: 4; -fx-padding: 0 4 0 4; -fx-font-weight: bold; -fx-text-fill: black;"));
+			dismissBtn.setOnAction(_ -> {
+				highlightRules.remove(rule);
+				saveHighlights();
+				TabState currentState = getActiveTabState();
+				if (currentState != null) {
+					currentState.highlightCounts = null;
+					currentState.lastCountedLine = 0;
+					currentState.logListView.refresh();
 				}
+				updateHighlightsBar();
 			});
-		}).start();
+
+			highlightTag.getChildren().addAll(label, dismissBtn);
+
+			highlightTag.setOnMouseEntered(_ -> highlightTag.setStyle(baseStyle + "-fx-brightness: 1.1;"));
+			highlightTag.setOnMouseExited(_ -> highlightTag.setStyle(baseStyle));
+
+			highlightTag.setOnMouseClicked(event -> {
+				if (event.getTarget() == dismissBtn)
+					return;
+				showOccurrences(rule);
+			});
+			Tooltip.install(highlightTag, new Tooltip("Click to show all occurrences"));
+
+			highlightsPane.getChildren().add(highlightTag);
+		}
 	}
 
 	private void showOccurrences(HighlightRule rule) {

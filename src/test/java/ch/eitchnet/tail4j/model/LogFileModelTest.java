@@ -109,4 +109,22 @@ public class LogFileModelTest {
 		assertEquals("Line 2", iteratedLines.get(1));
 		assertEquals("Line 3", iteratedLines.get(2));
 	}
+
+	@Test
+	public void testIterateLinesFromOffset() throws IOException {
+		Path logFile = tempDir.resolve("iterate_offset.log");
+		Files.writeString(logFile, "Line 1\nLine 2\nLine 3\nLine 4");
+
+		List<String> iteratedLines = new ArrayList<>();
+		try (LogFileModel model = new LogFileModel(logFile)) {
+			model.iterateLines(2, (line, _) -> {
+				iteratedLines.add(line);
+				return true;
+			});
+		}
+
+		assertEquals(2, iteratedLines.size());
+		assertEquals("Line 3", iteratedLines.get(0));
+		assertEquals("Line 4", iteratedLines.get(1));
+	}
 }
