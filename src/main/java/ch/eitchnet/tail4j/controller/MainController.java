@@ -33,7 +33,9 @@ public class MainController {
 	private static final Logger logger = LoggerFactory.getLogger(MainController.class);
 
 	private static final String PREF_LAST_OPEN_FILE = "lastOpenFile";
-	private static final String PREF_HIGHLIGHT_COUNT = "highlightCount";
+	private static final String PREF_LAST_GROUP = "lastGroup";
+	private static final String PREF_GROUPS = "highlightGroups";
+	private static final String PREF_HIGHLIGHT_COUNT = "highlightCount_";
 	private static final String PREF_HIGHLIGHT_PATTERN = "highlightPattern_";
 	private static final String PREF_HIGHLIGHT_COLOR = "highlightColor_";
 	private static final String PREF_HIGHLIGHT_IS_REGEX = "highlightIsRegex_";
@@ -51,8 +53,11 @@ public class MainController {
 	@FXML
 	private CheckBox tailCheckBox;
 	@FXML
+	private ComboBox<String> highlightGroupComboBox;
+	@FXML
 	private javafx.scene.layout.FlowPane highlightsPane;
 
+	private String currentGroup = "Default";
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
 
 	private static class TabState {
@@ -81,6 +86,8 @@ public class MainController {
 	public void initialize() {
 		highlightColorPicker.setValue(Color.RED);
 		loadHighlights();
+		highlightGroupComboBox.getSelectionModel().select(currentGroup);
+
 		tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
 			if (newTab != null) {
 				TabState state = (TabState) newTab.getUserData();
@@ -107,30 +114,235 @@ public class MainController {
 
 	private void saveHighlights() {
 		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-		logger.info("Saving highlights to preferences node: {}", prefs.absolutePath());
-		prefs.putInt(PREF_HIGHLIGHT_COUNT, highlightRules.size());
+		logger.info("Saving highlights for group {} to preferences node: {}", currentGroup, prefs.absolutePath());
+
+		String groups = String.join(",", highlightGroupComboBox.getItems());
+		prefs.put(PREF_GROUPS, groups);
+		prefs.put(PREF_LAST_GROUP, currentGroup);
+
+		prefs.putInt(PREF_HIGHLIGHT_COUNT + currentGroup, highlightRules.size());
 		for (int i = 0; i < highlightRules.size(); i++) {
 			HighlightRule rule = highlightRules.get(i);
-			prefs.put(PREF_HIGHLIGHT_PATTERN + i, rule.pattern());
-			prefs.put(PREF_HIGHLIGHT_COLOR + i, rule.color());
-			prefs.putBoolean(PREF_HIGHLIGHT_IS_REGEX + i, rule.isRegex());
+			prefs.put(PREF_HIGHLIGHT_PATTERN + currentGroup + "_" + i, rule.pattern());
+			prefs.put(PREF_HIGHLIGHT_COLOR + currentGroup + "_" + i, rule.color());
+			prefs.putBoolean(PREF_HIGHLIGHT_IS_REGEX + currentGroup + "_" + i, rule.isRegex());
+		}
+
+		try {
+			prefs.flush();
+		} catch (Exception e) {
+			logger.error("Failed to flush preferences", e);
 		}
 	}
 
+	private boolean ignoreGroupChange = false;
+
 	private void loadHighlights() {
-		Preferences prefs = Preferences.userNodeForPackage(MainController.class);
-		logger.info("Loading highlights from preferences node: {}", prefs.absolutePath());
-		int count = prefs.getInt(PREF_HIGHLIGHT_COUNT, 0);
-		highlightRules.clear();
-		for (int i = 0; i < count; i++) {
-			String pattern = prefs.get(PREF_HIGHLIGHT_PATTERN + i, null);
-			String color = prefs.get(PREF_HIGHLIGHT_COLOR + i, null);
-			boolean isRegex = prefs.getBoolean(PREF_HIGHLIGHT_IS_REGEX + i, false);
-			if (pattern != null && color != null) {
-				highlightRules.add(new HighlightRule(pattern, color, isRegex));
+		ignoreGroupChange = true;
+		try {
+			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+			logger.info("Loading highlights from preferences node: {}", prefs.absolutePath());
+
+			String groupsStr = prefs.get(PREF_GROUPS, "Default");
+			String[] groups = groupsStr.split(",");
+			highlightGroupComboBox.getItems().setAll(groups);
+
+			currentGroup = prefs.get(PREF_LAST_GROUP, "Default");
+			if (highlightGroupComboBox.getItems().isEmpty()) {
+				highlightGroupComboBox.getItems().add("Default");
+				currentGroup = "Default";
+			}
+			highlightGroupComboBox.getSelectionModel().select(currentGroup);
+
+			int count = prefs.getInt(PREF_HIGHLIGHT_COUNT + currentGroup, 0);
+
+			// Migration: if no highlights in currentGroup, check old keys
+			if (count == 0 && currentGroup.equals("Default")) {
+				count = prefs.getInt("highlightCount", 0);
+				if (count > 0) {
+					logger.info("Migrating highlights from old format...");
+					highlightRules.clear();
+					for (int i = 0; i < count; i++) {
+						String pattern = prefs.get("highlightPattern_" + i, null);
+						String color = prefs.get("highlightColor_" + i, null);
+						boolean isRegex = prefs.getBoolean("highlightIsRegex_" + i, false);
+						if (pattern != null && color != null) {
+							highlightRules.add(new HighlightRule(pattern, color, isRegex));
+						}
+					}
+					saveHighlights();
+					updateHighlightsBar();
+					return;
+				}
+			}
+
+			highlightRules.clear();
+			for (int i = 0; i < count; i++) {
+				String pattern = prefs.get(PREF_HIGHLIGHT_PATTERN + currentGroup + "_" + i, null);
+				String color = prefs.get(PREF_HIGHLIGHT_COLOR + currentGroup + "_" + i, null);
+				boolean isRegex = prefs.getBoolean(PREF_HIGHLIGHT_IS_REGEX + currentGroup + "_" + i, false);
+				if (pattern != null && color != null) {
+					highlightRules.add(new HighlightRule(pattern, color, isRegex));
+				}
+			}
+			updateHighlightsBar();
+		} finally {
+			ignoreGroupChange = false;
+		}
+	}
+
+	@FXML
+	private void handleGroupChange() {
+		if (ignoreGroupChange) {
+			return;
+		}
+
+		String newGroup = highlightGroupComboBox.getValue();
+		if (newGroup == null || newGroup.isEmpty() || newGroup.equals(currentGroup)) {
+			return;
+		}
+
+		saveHighlights();
+		currentGroup = newGroup;
+		if (!highlightGroupComboBox.getItems().contains(currentGroup)) {
+			highlightGroupComboBox.getItems().add(currentGroup);
+		}
+		loadHighlights();
+
+		TabState state = getActiveTabState();
+		if (state != null) {
+			refreshLogView(state);
+		}
+	}
+
+	@FXML
+	private void handleAddGroup() {
+		TextInputDialog dialog = new TextInputDialog("New Group");
+		dialog.setTitle("New Highlight Group");
+		dialog.setHeaderText("Create a new highlight group");
+		dialog.setContentText("Please enter the name of the new group:");
+
+		dialog.showAndWait().ifPresent(name -> {
+			String newGroup = name.trim();
+			if (newGroup.isEmpty()) {
+				showError("Group name cannot be empty");
+				return;
+			}
+			if (highlightGroupComboBox.getItems().contains(newGroup)) {
+				showError("Group '" + newGroup + "' already exists");
+				return;
+			}
+
+			saveHighlights();
+			ignoreGroupChange = true;
+			try {
+				highlightGroupComboBox.getItems().add(newGroup);
+				highlightGroupComboBox.getSelectionModel().select(newGroup);
+				currentGroup = newGroup;
+				highlightRules.clear();
+				updateHighlightsBar();
+				saveHighlights();
+			} finally {
+				ignoreGroupChange = false;
+			}
+		});
+	}
+
+	@FXML
+	private void handleRenameGroup() {
+		String oldGroup = highlightGroupComboBox.getValue();
+		if (oldGroup == null || oldGroup.equals("Default")) {
+			showError("The 'Default' group cannot be renamed.");
+			return;
+		}
+
+		TextInputDialog dialog = new TextInputDialog(oldGroup);
+		dialog.setTitle("Rename Highlight Group");
+		dialog.setHeaderText("Rename highlight group '" + oldGroup + "'");
+		dialog.setContentText("Please enter the new name for the group:");
+
+		dialog.showAndWait().ifPresent(name -> {
+			String newGroup = name.trim();
+			if (newGroup.isEmpty()) {
+				showError("Group name cannot be empty");
+				return;
+			}
+			if (newGroup.equals(oldGroup)) {
+				return;
+			}
+			if (highlightGroupComboBox.getItems().contains(newGroup)) {
+				showError("Group '" + newGroup + "' already exists");
+				return;
+			}
+
+			saveHighlights();
+
+			// Move highlights in preferences
+			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+			int count = prefs.getInt(PREF_HIGHLIGHT_COUNT + oldGroup, 0);
+			prefs.putInt(PREF_HIGHLIGHT_COUNT + newGroup, count);
+			for (int i = 0; i < count; i++) {
+				String pattern = prefs.get(PREF_HIGHLIGHT_PATTERN + oldGroup + "_" + i, "");
+				String color = prefs.get(PREF_HIGHLIGHT_COLOR + oldGroup + "_" + i, "");
+				boolean isRegex = prefs.getBoolean(PREF_HIGHLIGHT_IS_REGEX + oldGroup + "_" + i, false);
+
+				prefs.put(PREF_HIGHLIGHT_PATTERN + newGroup + "_" + i, pattern);
+				prefs.put(PREF_HIGHLIGHT_COLOR + newGroup + "_" + i, color);
+				prefs.putBoolean(PREF_HIGHLIGHT_IS_REGEX + newGroup + "_" + i, isRegex);
+
+				// Remove old keys
+				prefs.remove(PREF_HIGHLIGHT_PATTERN + oldGroup + "_" + i);
+				prefs.remove(PREF_HIGHLIGHT_COLOR + oldGroup + "_" + i);
+				prefs.remove(PREF_HIGHLIGHT_IS_REGEX + oldGroup + "_" + i);
+			}
+			prefs.remove(PREF_HIGHLIGHT_COUNT + oldGroup);
+
+			ignoreGroupChange = true;
+			try {
+				int index = highlightGroupComboBox.getItems().indexOf(oldGroup);
+				highlightGroupComboBox.getItems().set(index, newGroup);
+				highlightGroupComboBox.getSelectionModel().select(newGroup);
+				currentGroup = newGroup;
+				saveHighlights();
+			} finally {
+				ignoreGroupChange = false;
+			}
+		});
+	}
+
+	@FXML
+	private void handleDeleteGroup() {
+		String groupToDelete = highlightGroupComboBox.getValue();
+		if (groupToDelete == null || groupToDelete.equals("Default")) {
+			return;
+		}
+
+		Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+		alert.setTitle("Delete Group");
+		alert.setHeaderText("Delete highlight group '" + groupToDelete + "'?");
+		alert.setContentText("This will remove all highlights in this group.");
+		if (alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
+			// Remove from preferences
+			Preferences prefs = Preferences.userNodeForPackage(MainController.class);
+			int count = prefs.getInt(PREF_HIGHLIGHT_COUNT + groupToDelete, 0);
+			for (int i = 0; i < count; i++) {
+				prefs.remove(PREF_HIGHLIGHT_PATTERN + groupToDelete + "_" + i);
+				prefs.remove(PREF_HIGHLIGHT_COLOR + groupToDelete + "_" + i);
+				prefs.remove(PREF_HIGHLIGHT_IS_REGEX + groupToDelete + "_" + i);
+			}
+			prefs.remove(PREF_HIGHLIGHT_COUNT + groupToDelete);
+
+			ignoreGroupChange = true;
+			try {
+				highlightGroupComboBox.getItems().remove(groupToDelete);
+				currentGroup = "Default";
+				highlightGroupComboBox.getSelectionModel().select(currentGroup);
+				loadHighlights();
+				saveHighlights();
+			} finally {
+				ignoreGroupChange = false;
 			}
 		}
-		updateHighlightsBar();
 	}
 
 	@FXML
