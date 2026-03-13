@@ -8,7 +8,7 @@
     <artifactId>LumineLog</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <name>LumineLog</name>
-    <description>A JavaFX Log Viewer</description>
+    <description>LumineLog is a JavaFX Log Viewer designed for high performance and low CPU overhead (especially during tailing)</description>
     <url>https://github.com/eitch/LumineLog</url>
     <inceptionYear>2026</inceptionYear>
 
@@ -22,8 +22,8 @@
 
     <licenses>
         <license>
-            <name>Apache-2.0</name>
-            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <name>GNU General Public License v2.0</name>
+            <url>https://www.gnu.org/licenses/gpl-2.0.txt</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
