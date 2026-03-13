@@ -1,4 +1,4 @@
-package ch.eitchnet.tail4j.model;
+package ch.eitchnet.luminelog.model;
 
 import javafx.collections.ObservableListBase;
 

@@ -29,7 +29,7 @@ if [ -z "$JAVA_BIN" ]; then
   fi
 fi
 
-APP_JAR="$SCRIPT_DIR/Tail4j.jar"
+APP_JAR="$SCRIPT_DIR/LumineLog.jar"
 LIB_DIR="$SCRIPT_DIR/libs"
 
 echo "Using java ${JAVA_BIN}"

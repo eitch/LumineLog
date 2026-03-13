@@ -1,4 +1,4 @@
-package ch.eitchnet.tail4j.model;
+package ch.eitchnet.luminelog.model;
 
 import java.util.regex.Pattern;
 

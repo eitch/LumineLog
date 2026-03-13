@@ -5,11 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>ch.eitchnet</groupId>
-    <artifactId>Tail4j</artifactId>
+    <artifactId>LumineLog</artifactId>
     <version>0.1.0-SNAPSHOT</version>
-    <name>Tail4j</name>
+    <name>LumineLog</name>
     <description>A JavaFX Log Viewer</description>
-    <url>https://github.com/eitch/Tail4j</url>
+    <url>https://github.com/eitch/LumineLog</url>
     <inceptionYear>2026</inceptionYear>
 
     <developers>
@@ -29,9 +29,9 @@
     </licenses>
 
     <scm>
-        <connection>scm:git:https://github.com/eitch/Tail4j.git</connection>
-        <developerConnection>scm:git:ssh://github.com/eitch/Tail4j.git</developerConnection>
-        <url>https://github.com/eitch/Tail4j</url>
+        <connection>scm:git:https://github.com/eitch/LumineLog.git</connection>
+        <developerConnection>scm:git:ssh://github.com/eitch/LumineLog.git</developerConnection>
+        <url>https://github.com/eitch/LumineLog</url>
         <tag>HEAD</tag>
     </scm>
 
@@ -109,10 +109,10 @@
             <!--                        &lt;!&ndash; Default configuration for running with: mvn clean javafx:run &ndash;&gt;-->
             <!--                        <id>default-cli</id>-->
             <!--                        <configuration>-->
-            <!--                            <mainClass>ch.eitchnet.tail4j/ch.eitchnet.tail4j.Tail4jApplication</mainClass>-->
-            <!--                            <launcher>Tail4j</launcher>-->
-            <!--                            <jlinkZipName>Tail4j-${project.version}</jlinkZipName>-->
-            <!--                            <jlinkImageName>Tail4j</jlinkImageName>-->
+            <!--                            <mainClass>ch.eitchnet.luminelog/ch.eitchnet.luminelog.LumineLogApplication</mainClass>-->
+            <!--                            <launcher>LumineLog</launcher>-->
+            <!--                            <jlinkZipName>LumineLog-${project.version}</jlinkZipName>-->
+            <!--                            <jlinkImageName>LumineLog</jlinkImageName>-->
             <!--                            <noManPages>true</noManPages>-->
             <!--                            <stripDebug>true</stripDebug>-->
             <!--                            <noHeaderFiles>true</noHeaderFiles>-->
@@ -194,7 +194,7 @@
                                 <manifest>
                                     <addClasspath>true</addClasspath>
                                     <classpathPrefix>libs/</classpathPrefix>
-                                    <mainClass>ch.eitchnet.tail4j.Tail4jApplication</mainClass>
+                                    <mainClass>ch.eitchnet.luminelog.LumineLogApplication</mainClass>
                                     <useUniqueVersions>false</useUniqueVersions>
                                 </manifest>
                             </archive>

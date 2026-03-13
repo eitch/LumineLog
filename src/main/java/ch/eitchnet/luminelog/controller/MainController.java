@@ -1,6 +1,6 @@
-package ch.eitchnet.tail4j.controller;
+package ch.eitchnet.luminelog.controller;
 
-import ch.eitchnet.tail4j.model.*;
+import ch.eitchnet.luminelog.model.*;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;

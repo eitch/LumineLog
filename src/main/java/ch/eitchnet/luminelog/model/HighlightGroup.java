@@ -1,11 +1,11 @@
-package ch.eitchnet.tail4j.model;
+package ch.eitchnet.luminelog.model;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class HighlightGroup {
 	private String name;
-	private List<HighlightRule> rules = new ArrayList<>();
+	private List<HighlightRule> rules;
 
 	public HighlightGroup(String name, List<HighlightRule> rules) {
 		this.name = name;

@@ -1,4 +1,4 @@
-package ch.eitchnet.tail4j;
+package ch.eitchnet.luminelog;
 
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
@@ -8,7 +8,7 @@ import javafx.stage.Stage;
 
 import java.io.IOException;
 
-public class Tail4jApplication extends Application {
+public class LumineLogApplication extends Application {
 	@Override
 	public void start(Stage stage) throws IOException {
 		FXMLLoader loader = new FXMLLoader(getClass().getResource("view/main.fxml"));

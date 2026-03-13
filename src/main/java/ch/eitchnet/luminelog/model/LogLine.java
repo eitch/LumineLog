@@ -1,4 +1,4 @@
-package ch.eitchnet.tail4j.model;
+package ch.eitchnet.luminelog.model;
 
 public record LogLine(int lineNumber, String content) {
 }

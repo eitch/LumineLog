@@ -1,4 +1,4 @@
-package ch.eitchnet.tail4j.model;
+package ch.eitchnet.luminelog.model;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;

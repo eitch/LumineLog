@@ -1,8 +1,8 @@
-package ch.eitchnet.tail4j.controller;
+package ch.eitchnet.luminelog.controller;
 
-import ch.eitchnet.tail4j.model.Config;
-import ch.eitchnet.tail4j.model.HighlightGroup;
-import ch.eitchnet.tail4j.model.HighlightRule;
+import ch.eitchnet.luminelog.model.Config;
+import ch.eitchnet.luminelog.model.HighlightGroup;
+import ch.eitchnet.luminelog.model.HighlightRule;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -21,7 +21,7 @@ public class ConfigServiceTest {
 			}
 
 			@Override
-			public ch.eitchnet.tail4j.model.Config createDefaultConfig() {
+			public ch.eitchnet.luminelog.model.Config createDefaultConfig() {
 				// Make it accessible for test
 				return super.createDefaultConfig();
 			}
@@ -33,7 +33,7 @@ public class ConfigServiceTest {
 		List<HighlightGroup> groups = config.getHighlightGroups();
 		assertEquals(2, groups.size());
 
-		HighlightGroup defaultGroup = groups.get(0);
+		HighlightGroup defaultGroup = groups.getFirst();
 		assertEquals("Default", defaultGroup.getName());
 
 		List<HighlightRule> rules = defaultGroup.getRules();
@@ -44,7 +44,7 @@ public class ConfigServiceTest {
 		rules = slf4jGroup.getRules();
 		assertEquals(4, rules.size());
 
-		assertEquals("INFO", rules.get(0).getPattern());
+		assertEquals("INFO", rules.getFirst().getPattern());
 		assertEquals("#b3ccff", rules.get(0).getColor());
 		assertFalse(rules.get(0).isIsRegex());
 

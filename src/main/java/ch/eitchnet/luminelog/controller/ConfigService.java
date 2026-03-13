@@ -1,8 +1,8 @@
-package ch.eitchnet.tail4j.controller;
+package ch.eitchnet.luminelog.controller;
 
-import ch.eitchnet.tail4j.model.Config;
-import ch.eitchnet.tail4j.model.HighlightGroup;
-import ch.eitchnet.tail4j.model.HighlightRule;
+import ch.eitchnet.luminelog.model.Config;
+import ch.eitchnet.luminelog.model.HighlightGroup;
+import ch.eitchnet.luminelog.model.HighlightRule;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import org.slf4j.Logger;

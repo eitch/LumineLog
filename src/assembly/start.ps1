@@ -30,7 +30,7 @@ if (-not $javaBin) {
     }
 }
 
-$appJar = Join-Path $ScriptDir 'Tail4j.jar'
+$appJar = Join-Path $ScriptDir 'LumineLog.jar'
 
 if (-not (Test-Path -LiteralPath $appJar)) {
     Write-Error "Error: Application jar not found: $appJar"
