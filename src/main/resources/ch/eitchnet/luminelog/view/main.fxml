@@ -12,6 +12,9 @@
             <MenuItem text="Open" onAction="#handleOpen"/>
             <MenuItem text="Exit" onAction="#handleExit"/>
         </Menu>
+        <Menu text="Help">
+            <MenuItem text="About" onAction="#handleAbout"/>
+        </Menu>
     </MenuBar>
 
     <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 10;">

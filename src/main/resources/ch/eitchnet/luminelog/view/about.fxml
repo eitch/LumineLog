@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.image.ImageView?>
+<?import javafx.scene.layout.*?>
+<VBox xmlns="http://javafx.com/javafx"
+      xmlns:fx="http://javafx.com/fxml"
+      fx:controller="ch.eitchnet.luminelog.controller.AboutController"
+      alignment="CENTER" spacing="20" style="-fx-padding: 30;">
+
+    <ImageView fx:id="logoImageView" fitWidth="128" fitHeight="128" preserveRatio="true"/>
+
+    <VBox alignment="CENTER" spacing="5">
+        <Label text="LumineLog" style="-fx-font-size: 24; -fx-font-weight: bold;"/>
+        <Label fx:id="versionLabel" text="Version 0.1.0"/>
+        <Label text="© 2026 Robert von Burg"/>
+    </VBox>
+
+    <Label text="LumineLog is a JavaFX Log Viewer designed for high performance and low CPU overhead."
+           wrapText="true" textAlignment="CENTER"/>
+
+    <Hyperlink text="https://github.com/eitch/LumineLog" onAction="#handleOpenGithub"/>
+
+    <Button text="Close" onAction="#handleClose"/>
+
+</VBox>

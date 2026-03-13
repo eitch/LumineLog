@@ -17,6 +17,7 @@
 package ch.eitchnet.luminelog;
 
 import javafx.application.Application;
+import javafx.application.HostServices;
 import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
@@ -25,8 +26,15 @@ import javafx.stage.Stage;
 import java.io.IOException;
 
 public class LumineLogApplication extends Application {
+	private static HostServices hostServices;
+
+	public static HostServices getAppHostServices() {
+		return hostServices;
+	}
+
 	@Override
 	public void start(Stage stage) throws IOException {
+		hostServices = getHostServices();
 		FXMLLoader loader = new FXMLLoader(getClass().getResource("view/main.fxml"));
 		Parent root = loader.load();
 		Scene scene = new Scene(root, 1200, 800);

@@ -17,12 +17,15 @@
 package ch.eitchnet.luminelog.controller;
 
 import ch.eitchnet.luminelog.model.*;
+import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
+import javafx.fxml.FXMLLoader;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseButton;
@@ -251,11 +254,11 @@ public class MainController {
 		dialog.showAndWait().ifPresent(name -> {
 			String newGroup = name.trim();
 			if (newGroup.isEmpty()) {
-				showError("Group name cannot be empty");
+				DialogUtil.showError("Group name cannot be empty");
 				return;
 			}
 			if (highlightGroupComboBox.getItems().contains(newGroup)) {
-				showError("Group '" + newGroup + "' already exists");
+				DialogUtil.showError("Group '" + newGroup + "' already exists");
 				return;
 			}
 
@@ -278,7 +281,7 @@ public class MainController {
 	private void handleRenameGroup() {
 		String oldGroup = highlightGroupComboBox.getValue();
 		if (oldGroup == null || oldGroup.equals("Default")) {
-			showError("The 'Default' group cannot be renamed.");
+			DialogUtil.showError("The 'Default' group cannot be renamed.");
 			return;
 		}
 
@@ -290,14 +293,14 @@ public class MainController {
 		dialog.showAndWait().ifPresent(name -> {
 			String newGroup = name.trim();
 			if (newGroup.isEmpty()) {
-				showError("Group name cannot be empty");
+				DialogUtil.showError("Group name cannot be empty");
 				return;
 			}
 			if (newGroup.equals(oldGroup)) {
 				return;
 			}
 			if (highlightGroupComboBox.getItems().contains(newGroup)) {
-				showError("Group '" + newGroup + "' already exists");
+				DialogUtil.showError("Group '" + newGroup + "' already exists");
 				return;
 			}
 
@@ -416,9 +419,8 @@ public class MainController {
 					});
 				}
 			});
-
 		} catch (IOException e) {
-			showError("Could not open file: " + e.getMessage());
+			DialogUtil.showError("Could not open file: " + e.getMessage());
 		}
 	}
 
@@ -670,7 +672,7 @@ public class MainController {
 				Platform.runLater(() -> {
 					openOccurrenceStages.remove(rule);
 					stage.close();
-					showError("Error searching for occurrences: " + e.getMessage());
+					DialogUtil.showError("Error searching for occurrences: " + e.getMessage());
 				});
 				return;
 			}
@@ -856,6 +858,22 @@ public class MainController {
 	}
 
 	@FXML
+	private void handleAbout() {
+		try {
+			FXMLLoader loader = new FXMLLoader(getClass().getResource("/ch/eitchnet/luminelog/view/about.fxml"));
+			Parent root = loader.load();
+			Stage stage = new Stage();
+			stage.setTitle("About LumineLog");
+			stage.setScene(new Scene(root));
+			stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+			stage.showAndWait();
+		} catch (IOException e) {
+			logger.error("Failed to show about dialog", e);
+			DialogUtil.showError("Failed to show about dialog", e);
+		}
+	}
+
+	@FXML
 	private void handleExit() {
 		saveHighlights();
 		for (Tab tab : tabPane.getTabs()) {
@@ -870,11 +888,5 @@ public class MainController {
 	private String toWebColor(Color color) {
 		return String.format("#%02X%02X%02X", (int) (color.getRed() * 255), (int) (color.getGreen() * 255),
 				(int) (color.getBlue() * 255));
-	}
-
-	private void showError(String message) {
-		Alert alert = new Alert(Alert.AlertType.ERROR);
-		alert.setContentText(message);
-		alert.showAndWait();
 	}
 }
