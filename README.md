@@ -1,6 +1,6 @@
-# ![LumineLog Logo](src/main/resources/ch/eitchnet/luminelog/assets/logo.svg) Tail4j Log Viewer
+# ![LumineLog Logo](src/main/resources/ch/eitchnet/luminelog/assets/logo.svg) LumineLog
 
-Tail4j (also known as LumineLog) is a modern, cross-platform log viewer application built with **JavaFX**. It provides a real-time "tail -f" experience with powerful highlighting and multi-file support.
+LumineLog is a modern, cross-platform log viewer application built with **JavaFX**. It provides a real-time "tail -f" experience with powerful highlighting and multi-file support.
 
 ## Features
 
