@@ -6,8 +6,6 @@ import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
 
 public class LogFileModel implements AutoCloseable {
 	private RandomAccessFile raf;
