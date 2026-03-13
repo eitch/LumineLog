@@ -11,31 +11,42 @@ import java.util.List;
 
 public class LogFileModel implements AutoCloseable {
 	private RandomAccessFile raf;
-	private final List<Long> lineOffsets = new ArrayList<>();
+	private long[] lineOffsets = new long[1024];
+	private int lineCount = 0;
 	private long lastProcessedPosition = 0;
+	private final ByteBuffer indexSearchBuffer = ByteBuffer.allocateDirect(16384);
 
 	public LogFileModel(Path filePath) throws IOException {
 		this.raf = new RandomAccessFile(filePath.toFile(), "r");
 		indexFile();
 	}
 
+	private void addOffset(long offset) {
+		if (lineCount == lineOffsets.length) {
+			int newSize = (int) (lineOffsets.length * 1.5);
+			long[] newOffsets = new long[newSize];
+			System.arraycopy(lineOffsets, 0, newOffsets, 0, lineOffsets.length);
+			lineOffsets = newOffsets;
+		}
+		lineOffsets[lineCount++] = offset;
+	}
+
 	private void indexFile() throws IOException {
-		lineOffsets.clear();
-		lineOffsets.add(0L);
+		lineCount = 0;
+		addOffset(0L);
 		long fileSize = raf.length();
 
-		ByteBuffer buffer = ByteBuffer.allocate(8192);
 		FileChannel fileChannel = raf.getChannel();
 		long currentPos = 0;
 		while (currentPos < fileSize) {
-			buffer.clear();
-			int read = fileChannel.read(buffer, currentPos);
+			indexSearchBuffer.clear();
+			int read = fileChannel.read(indexSearchBuffer, currentPos);
 			if (read <= 0)
 				break;
-			buffer.flip();
+			indexSearchBuffer.flip();
 			for (int i = 0; i < read; i++) {
-				if (buffer.get(i) == '\n') {
-					lineOffsets.add(currentPos + i + 1);
+				if (indexSearchBuffer.get(i) == '\n') {
+					addOffset(currentPos + i + 1);
 				}
 			}
 			currentPos += read;
@@ -47,26 +58,25 @@ public class LogFileModel implements AutoCloseable {
 		long fileSize = raf.length();
 		if (fileSize < lastProcessedPosition) {
 			// File truncated
-			lineOffsets.clear();
-			lineOffsets.add(0L);
+			lineCount = 0;
+			addOffset(0L);
 			lastProcessedPosition = 0;
 		}
 
 		if (fileSize == lastProcessedPosition)
 			return;
 
-		ByteBuffer buffer = ByteBuffer.allocate(8192);
 		FileChannel channel = raf.getChannel();
 		long currentPos = lastProcessedPosition;
 		while (currentPos < fileSize) {
-			buffer.clear();
-			int read = channel.read(buffer, currentPos);
+			indexSearchBuffer.clear();
+			int read = channel.read(indexSearchBuffer, currentPos);
 			if (read <= 0)
 				break;
-			buffer.flip();
+			indexSearchBuffer.flip();
 			for (int i = 0; i < read; i++) {
-				if (buffer.get(i) == '\n') {
-					lineOffsets.add(currentPos + i + 1);
+				if (indexSearchBuffer.get(i) == '\n') {
+					addOffset(currentPos + i + 1);
 				}
 			}
 			currentPos += read;
@@ -75,14 +85,14 @@ public class LogFileModel implements AutoCloseable {
 	}
 
 	public int getLineCount() {
-		return lineOffsets.size();
+		return lineCount;
 	}
 
 	public synchronized String getLine(int index) throws IOException {
-		if (index < 0 || index >= lineOffsets.size())
+		if (index < 0 || index >= lineCount)
 			return null;
-		long start = lineOffsets.get(index);
-		long end = (index + 1 < lineOffsets.size()) ? lineOffsets.get(index + 1) : -1;
+		long start = lineOffsets[index];
+		long end = (index + 1 < lineCount) ? lineOffsets[index + 1] : -1;
 
 		return getLine(raf, start, end);
 	}
@@ -112,14 +122,16 @@ public class LogFileModel implements AutoCloseable {
 
 	public synchronized void iterateLines(int startLine, LineProcessor processor) throws IOException {
 		long fileSize = raf.length();
-		if (fileSize == 0)
+		if (fileSize == 0 || startLine >= lineCount)
 			return;
 
 		FileChannel channel = raf.getChannel();
+		ByteBuffer buffer = ByteBuffer.allocateDirect(128 * 1024);
+		long bufferStartPos = -1;
 
-		for (int i = startLine; i < lineOffsets.size(); i++) {
-			long start = lineOffsets.get(i);
-			long end = (i + 1 < lineOffsets.size()) ? lineOffsets.get(i + 1) : fileSize;
+		for (int i = startLine; i < lineCount; i++) {
+			long start = lineOffsets[i];
+			long end = (i + 1 < lineCount) ? lineOffsets[i + 1] : fileSize;
 			long length = end - start;
 
 			if (length <= 0) {
@@ -128,21 +140,44 @@ public class LogFileModel implements AutoCloseable {
 				continue;
 			}
 
+			if (length > buffer.capacity()) {
+				byte[] bytes = new byte[(int) length];
+				channel.read(ByteBuffer.wrap(bytes), start);
+				String line = sanitizeLine(new String(bytes));
+				if (!processor.process(line, i))
+					break;
+				continue;
+			}
+
+			// Refill if not in buffer or not enough remaining
+			if (bufferStartPos == -1 || start < bufferStartPos || start + length > bufferStartPos + buffer.limit()) {
+				buffer.clear();
+				int read = channel.read(buffer, start);
+				if (read <= 0)
+					break;
+				buffer.flip();
+				bufferStartPos = start;
+			}
+
+			buffer.position((int) (start - bufferStartPos));
 			byte[] bytes = new byte[(int) length];
-			channel.read(ByteBuffer.wrap(bytes), start);
+			buffer.get(bytes);
 
-			String line = new String(bytes);
-			if (line.endsWith("\n")) {
-				line = line.substring(0, line.length() - 1);
-			}
-			if (line.endsWith("\r")) {
-				line = line.substring(0, line.length() - 1);
-			}
-
+			String line = sanitizeLine(new String(bytes));
 			if (!processor.process(line, i)) {
 				break;
 			}
 		}
+	}
+
+	private String sanitizeLine(String line) {
+		if (line.endsWith("\n")) {
+			line = line.substring(0, line.length() - 1);
+		}
+		if (line.endsWith("\r")) {
+			line = line.substring(0, line.length() - 1);
+		}
+		return line;
 	}
 
 	public synchronized void iterateLines(LineProcessor processor) throws IOException {

@@ -436,7 +436,7 @@ public class MainController {
 
 	private void startTailing(TabState state) {
 		state.tailTimer = new Timer(true);
-		state.tailTimer.scheduleAtFixedRate(new TimerTask() {
+		state.tailTimer.schedule(new TimerTask() {
 			@Override
 			public void run() {
 				if (tailCheckBox.isSelected() && state.logModel != null) {
