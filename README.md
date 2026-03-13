@@ -13,9 +13,9 @@ LumineLog is a modern, cross-platform log viewer application built with **JavaFX
 - **Multi-tab Interface**: Open and monitor multiple log files simultaneously in separate tabs.
 - **Customizable**: Add, rename, or delete highlight groups and rules on the fly.
 - **Cross-platform Configuration**: Automatically saves your preferences (last opened file, highlights) in standard OS locations:
-  - **Linux**: `~/.config/tail4j/` (respects `XDG_CONFIG_HOME`)
-  - **Windows**: `%APPDATA%\tail4j\`
-  - **macOS**: `~/Library/Application Support/tail4j/`
+  - **Linux**: `~/.config/LumineLog/` (respects `XDG_CONFIG_HOME`)
+  - **Windows**: `%APPDATA%\LumineLog\`
+  - **macOS**: `~/Library/Application Support/LumineLog/`
 
 ## Technology Stack
 

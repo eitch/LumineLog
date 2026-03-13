@@ -36,7 +36,7 @@ public class ConfigService {
 
 	private static final Logger logger = LoggerFactory.getLogger(ConfigService.class);
 
-	private static final String APP_NAME = "tail4j";
+	private static final String APP_NAME = "LumineLog";
 	private static final String CONFIG_FILE_NAME = "config.json";
 
 	private final Gson gson;

@@ -31,7 +31,7 @@ public class LumineLogApplication extends Application {
 		Parent root = loader.load();
 		Scene scene = new Scene(root, 1200, 800);
 		stage.setScene(scene);
-		stage.setTitle("Tail4j Log Viewer");
+		stage.setTitle("LumineLog");
 		stage.show();
 	}
 
