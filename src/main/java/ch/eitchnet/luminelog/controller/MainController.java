@@ -858,6 +858,59 @@ public class MainController {
 	}
 
 	@FXML
+	private void handleResetHighlights() {
+		if (DialogUtil.showConfirmation("Reset Highlights", "Are you sure you want to reset all highlight groups?",
+				"This will clear all current highlight groups and replace them with the default groups.")) {
+
+			Config defaultConfig = configService.createDefaultConfig();
+
+			// Replace all current groups in the combo box
+			List<String> defaultGroupNames = defaultConfig
+					.getHighlightGroups()
+					.stream()
+					.map(HighlightGroup::getName)
+					.toList();
+
+			ignoreGroupChange = true;
+			try {
+				highlightGroupComboBox.getItems().setAll(defaultGroupNames);
+
+				// Reset to the default group
+				currentGroup = defaultConfig.getLastGroup();
+				highlightGroupComboBox.getSelectionModel().select(currentGroup);
+
+				// Reset the active rules to match the new current group
+				highlightRules.clear();
+				defaultConfig
+						.getHighlightGroups()
+						.stream()
+						.filter(g -> g.getName().equals(currentGroup))
+						.findFirst()
+						.ifPresent(g -> highlightRules.addAll(g.getRules()));
+
+				updateHighlightsBar();
+
+				// Save the default config directly
+				TabState state = getActiveTabState();
+				if (state != null) {
+					defaultConfig = new Config(state.file.getAbsolutePath(), currentGroup,
+							defaultConfig.getHighlightGroups());
+				}
+				configService.saveConfig(defaultConfig);
+
+				// Refresh the log view to apply the reset rules
+				if (state != null) {
+					state.highlightCounts = null;
+					state.lastCountedLine = 0;
+					state.logListView.refresh();
+				}
+			} finally {
+				ignoreGroupChange = false;
+			}
+		}
+	}
+
+	@FXML
 	private void handleAbout() {
 		try {
 			FXMLLoader loader = new FXMLLoader(getClass().getResource("/ch/eitchnet/luminelog/view/about.fxml"));

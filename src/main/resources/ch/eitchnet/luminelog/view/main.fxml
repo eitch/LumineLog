@@ -12,6 +12,9 @@
             <MenuItem text="Open" onAction="#handleOpen"/>
             <MenuItem text="Exit" onAction="#handleExit"/>
         </Menu>
+        <Menu text="Edit">
+            <MenuItem text="Reset Highlights" onAction="#handleResetHighlights"/>
+        </Menu>
         <Menu text="Help">
             <MenuItem text="About" onAction="#handleAbout"/>
         </Menu>

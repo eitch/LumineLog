@@ -17,6 +17,7 @@
 package ch.eitchnet.luminelog.util;
 
 import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextArea;
 import javafx.scene.layout.GridPane;
@@ -67,5 +68,14 @@ public class DialogUtil {
 		alert.getDialogPane().setExpandableContent(expContent);
 
 		alert.showAndWait();
+	}
+
+	public static boolean showConfirmation(String title, String header, String content) {
+		Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+		alert.setTitle(title);
+		alert.setHeaderText(header);
+		alert.setContentText(content);
+
+		return alert.showAndWait().filter(response -> response == ButtonType.OK).isPresent();
 	}
 }
