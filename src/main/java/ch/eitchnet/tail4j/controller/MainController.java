@@ -6,6 +6,7 @@ import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseButton;
@@ -101,6 +102,18 @@ public class MainController {
 				statusLabel.setText("No file opened");
 			}
 			updateHighlightsBar();
+		});
+
+		tailCheckBox.selectedProperty().addListener((_, _, isSelected) -> {
+			if (isSelected) {
+				TabState state = getActiveTabState();
+				if (state != null) {
+					int lineCount = state.logItems.size();
+					if (lineCount > 0) {
+						state.logListView.scrollTo(lineCount - 1);
+					}
+				}
+			}
 		});
 
 		Platform.runLater(this::loadLastFile);
@@ -359,7 +372,34 @@ public class MainController {
 			refreshLogView(state);
 			startTailing(state);
 
-			Platform.runLater(() -> logListView.setItems(logItems));
+			Platform.runLater(() -> {
+				logListView.setItems(logItems);
+				if (tailCheckBox.isSelected()) {
+					int lineCount = logItems.size();
+					if (lineCount > 0) {
+						logListView.scrollTo(lineCount - 1);
+					}
+				}
+				Node scrollBarNode = logListView.lookup(".scroll-bar:vertical");
+				if (scrollBarNode instanceof ScrollBar scrollBar) {
+					scrollBar.valueProperty().addListener((_, oldVal, newVal) -> {
+						if (tabPane.getSelectionModel().getSelectedItem() != tab)
+							return;
+
+						double value = newVal.doubleValue();
+						double max = scrollBar.getMax();
+						if (value >= max) {
+							if (!tailCheckBox.isSelected()) {
+								tailCheckBox.setSelected(true);
+							}
+						} else if (value < oldVal.doubleValue()) {
+							if (tailCheckBox.isSelected()) {
+								tailCheckBox.setSelected(false);
+							}
+						}
+					});
+				}
+			});
 
 		} catch (IOException e) {
 			showError("Could not open file: " + e.getMessage());
@@ -671,7 +711,8 @@ public class MainController {
 
 						String content = item.content();
 						if (highlightRules.isEmpty()) {
-							addText(content, "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+							addText(content, "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;",
+									textFlow);
 						} else {
 							// Find all matches for all rules
 							List<MatchWithColor> matches = findMatches(content);
@@ -685,7 +726,8 @@ public class MainController {
 								// Add non-highlighted part
 								if (match.start > lastEnd)
 									addText(content.substring(lastEnd, match.start),
-											"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+											"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;",
+											textFlow);
 
 								Label highlightLabel = new Label(content.substring(match.start, match.end));
 								highlightLabel.setMinHeight(Region.USE_PREF_SIZE);
@@ -700,8 +742,8 @@ public class MainController {
 
 							// Add remaining part
 							if (lastEnd < content.length()) {
-								addText(content.substring(lastEnd), "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;",
-										textFlow);
+								addText(content.substring(lastEnd),
+										"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
 							}
 						}
 
@@ -741,7 +783,8 @@ public class MainController {
 					lastEnd = range.end();
 				}
 				if (lastEnd < content.length()) {
-					addText(content.substring(lastEnd), "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+					addText(content.substring(lastEnd),
+							"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
 				}
 
 				setGraphic(textFlow);
