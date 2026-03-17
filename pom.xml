@@ -42,10 +42,21 @@
 
         <!-- Azul Zulu JRE download coordinates (adjust as needed) -->
         <!-- These URLs can be updated to newer builds; see https://www.azul.com/downloads/?package=jre -->
-        <zulu.linux.url>https://cdn.azul.com/zulu/bin/zulu25.30.17-ca-fx-jre25.0.1-linux_x64.tar.gz</zulu.linux.url>
-        <zulu.windows.url>https://cdn.azul.com/zulu/bin/zulu25.30.17-ca-fx-jre25.0.1-win_x64.zip</zulu.windows.url>
+        <zulu.linux.name>zulu25.32.21-ca-fx-jdk25.0.2-linux_x64</zulu.linux.name>
+        <zulu.linux.url>https://cdn.azul.com/zulu/bin/${zulu.linux.name}.tar.gz</zulu.linux.url>
+        <zulu.linux.sha256>2a97720c043166381fb6e1e7884969ac9d9149107678ec2f424d50697c55fa49</zulu.linux.sha256>
+        <zulu.windows.name>zulu25.32.21-ca-fx-jdk25.0.2-win_x64</zulu.windows.name>
+        <zulu.windows.url>https://cdn.azul.com/zulu/bin/${zulu.windows.name}.zip</zulu.windows.url>
+        <zulu.windows.sha256>50d428552aef90f1f36117f68f03a7f52f63753ade454b1319ea4ae44b52ac19</zulu.windows.sha256>
+
+        <!-- jrealeaser -->
         <app.main.module>ch.eitchnet.luminelog</app.main.module>
         <app.main.class>ch.eitchnet.luminelog.LumineLogApplication</app.main.class>
+        <java.version>25</java.version>
+        <jdk.version>25.0.2</jdk.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <maven.compiler.release>${java.version}</maven.compiler.release>
     </properties>
 
     <dependencies>
@@ -135,138 +146,163 @@
                 </executions>
             </plugin>
 
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>prepare-package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>
+                                ${project.build.directory}/libs
+                            </outputDirectory>
+                            <includeScope>compile</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
         </plugins>
     </build>
 
     <profiles>
-
         <profile>
             <id>release</id>
-
             <build>
-
-                <finalName>${jarFinalName}</finalName>
-
+                <finalName>${jarFinalName}-${project.version}</finalName>
                 <plugins>
 
                     <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-source-plugin</artifactId>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-dependency-plugin</artifactId>
+                        <groupId>org.jreleaser</groupId>
+                        <artifactId>jdks-maven-plugin</artifactId>
+                        <version>1.23.0</version>
                         <executions>
                             <execution>
-                                <id>copy-dependencies</id>
-                                <phase>prepare-package</phase>
+                                <phase>package</phase>
                                 <goals>
-                                    <goal>copy-dependencies</goal>
+                                    <goal>setup-jdks</goal>
                                 </goals>
                                 <configuration>
-                                    <outputDirectory>
-                                        ${project.build.directory}/libs
-                                    </outputDirectory>
-                                    <excludeArtifactIds>jakarta.mail-api,jakarta.mail,javax.mail-api,javax.mail,activation</excludeArtifactIds>
-                                    <includeScope>compile</includeScope>
+                                    <jdks>
+                                        <jdk>
+                                            <name>jdk-linux</name>
+                                            <platform>linux-x86_64</platform>
+                                            <url>${zulu.linux.url}</url>
+                                            <checksum>${zulu.linux.sha256}</checksum>
+                                        </jdk>
+                                        <jdk>
+                                            <name>jdk-windows</name>
+                                            <platform>windows-x86_64</platform>
+                                            <url>${zulu.windows.url}</url>
+                                            <checksum>${zulu.windows.sha256}</checksum>
+                                        </jdk>
+                                    </jdks>
                                 </configuration>
+
                             </execution>
                         </executions>
                     </plugin>
 
                     <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-jar-plugin</artifactId>
-                        <configuration>
-                            <archive>
-                                <manifest>
-                                    <addClasspath>true</addClasspath>
-                                    <classpathPrefix>libs/</classpathPrefix>
-                                    <mainClass>ch.eitchnet.luminelog.LumineLogApplication</mainClass>
-                                    <useUniqueVersions>false</useUniqueVersions>
-                                </manifest>
-                            </archive>
-                        </configuration>
-                    </plugin>
+                        <groupId>org.jreleaser</groupId>
+                        <artifactId>jreleaser-maven-plugin</artifactId>
+                        <version>1.23.0</version>
 
-                    <!-- Download JavaFX SDKs for Linux and Windows x64 during package phase -->
-                    <plugin>
-                        <groupId>com.googlecode.maven-download-plugin</groupId>
-                        <artifactId>download-maven-plugin</artifactId>
-                        <version>1.7.1</version>
                         <executions>
                             <execution>
-                                <id>download-zulu-jre-linux-x64</id>
-                                <phase>prepare-package</phase>
+                                <phase>package</phase>
                                 <goals>
-                                    <goal>wget</goal>
+                                    <goal>assemble</goal>
                                 </goals>
-                                <configuration>
-                                    <url>${zulu.linux.url}</url>
-                                    <outputDirectory>${project.build.directory}/runtime/linux-x64</outputDirectory>
-                                    <unpack>true</unpack>
-                                </configuration>
-                            </execution>
-                            <execution>
-                                <id>download-zulu-jre-windows-x64</id>
-                                <phase>prepare-package</phase>
-                                <goals>
-                                    <goal>wget</goal>
-                                </goals>
-                                <configuration>
-                                    <url>${zulu.windows.url}</url>
-                                    <outputDirectory>${project.build.directory}/runtime/windows-x64</outputDirectory>
-                                    <unpack>true</unpack>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
 
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-assembly-plugin</artifactId>
-                        <version>3.6.0</version>
-                        <executions>
-                            <execution>
-                                <id>linux-x64</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>single</goal>
-                                </goals>
                                 <configuration>
-                                    <finalName>${project.artifactId}-${project.version}-linux-x64</finalName>
-                                    <appendAssemblyId>false</appendAssemblyId>
-                                    <descriptors>
-                                        <descriptor>src/assembly/assembly-linux.xml</descriptor>
-                                    </descriptors>
-                                </configuration>
-                            </execution>
-                            <execution>
-                                <id>windows-x64</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>single</goal>
-                                </goals>
-                                <configuration>
-                                    <finalName>${project.artifactId}-${project.version}-windows-x64</finalName>
-                                    <appendAssemblyId>false</appendAssemblyId>
-                                    <descriptors>
-                                        <descriptor>src/assembly/assembly-windows.xml</descriptor>
-                                    </descriptors>
+                                    <jreleaser>
+                                        <project>
+                                            <name>${project.name}</name>
+                                            <authors>
+                                                <author>eitch</author>
+                                            </authors>
+                                            <maintainers>
+                                                <maintainer>eitch</maintainer>
+                                            </maintainers>
+                                        </project>
+
+                                        <release>
+                                            <github>
+                                                <overwrite>true</overwrite>
+                                                <sign>true</sign>
+                                            </github>
+                                        </release>
+
+                                        <signing>
+                                            <active>ALWAYS</active>
+                                            <pgp>
+                                                <active>ALWAYS</active>
+                                                <command>
+                                                    <executable>gpg</executable>
+                                                    <keyName>${gpg.keyname}</keyName>
+                                                </command>
+                                            </pgp>
+                                        </signing>
+
+                                        <assemble>
+                                            <jlink>
+                                                <LumineLog>
+                                                    <active>ALWAYS</active>
+                                                    <java>
+                                                        <mainClass>${app.main.class}</mainClass>
+                                                        <mainModule>${app.main.module}</mainModule>
+                                                        <jvmOptions>
+                                                            <universal>
+                                                                --enable-native-access=javafx.graphics
+                                                            </universal>
+                                                        </jvmOptions>
+                                                    </java>
+                                                    <imageName>${jarFinalName}-${project.version}</imageName>
+                                                    <executable>${jarFinalName}</executable>
+
+                                                    <mainJar>
+                                                        <path>target/{{distributionName}}-{{projectVersion}}.jar</path>
+                                                    </mainJar>
+                                                    <additionalModuleNames>
+                                                        javafx.base,javafx.graphics,javafx.controls,javafx.swing
+                                                    </additionalModuleNames>
+                                                    <jdeps>
+                                                        <multiRelease>${java.version}</multiRelease>
+                                                        <ignoreMissingDeps>true</ignoreMissingDeps>
+                                                    </jdeps>
+                                                    <jar>
+                                                        <pattern>target/libs/*.jar</pattern>
+                                                    </jar>
+                                                    <jdk>
+                                                        <path>target/jdks/jdk-linux/${zulu.linux.name}</path>
+                                                        <platform>linux</platform>
+                                                    </jdk>
+                                                    <targetJdks>
+                                                        <targetJdk>
+                                                            <path>target/jdks/jdk-linux/${zulu.linux.name}</path>
+                                                            <platform>linux</platform>
+                                                        </targetJdk>
+                                                        <targetJdk>
+                                                            <path>target/jdks/jdk-windows/${zulu.windows.name}</path>
+                                                            <platform>windows</platform>
+                                                        </targetJdk>
+                                                    </targetJdks>
+                                                </LumineLog>
+                                            </jlink>
+                                        </assemble>
+                                    </jreleaser>
                                 </configuration>
                             </execution>
                         </executions>
                     </plugin>
 
                 </plugins>
-
             </build>
-
         </profile>
 
     </profiles>
