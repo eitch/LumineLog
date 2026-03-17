@@ -269,7 +269,7 @@
                                                         <path>target/{{distributionName}}-{{projectVersion}}.jar</path>
                                                     </mainJar>
                                                     <additionalModuleNames>
-                                                        javafx.base,javafx.graphics,javafx.controls,javafx.swing
+                                                        ch.qos.logback.classic,ch.qos.logback.core,javafx.base,javafx.graphics,javafx.controls,java.naming
                                                     </additionalModuleNames>
                                                     <jdeps>
                                                         <multiRelease>${java.version}</multiRelease>
