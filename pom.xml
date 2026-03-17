@@ -44,6 +44,8 @@
         <!-- These URLs can be updated to newer builds; see https://www.azul.com/downloads/?package=jre -->
         <zulu.linux.url>https://cdn.azul.com/zulu/bin/zulu25.30.17-ca-fx-jre25.0.1-linux_x64.tar.gz</zulu.linux.url>
         <zulu.windows.url>https://cdn.azul.com/zulu/bin/zulu25.30.17-ca-fx-jre25.0.1-win_x64.zip</zulu.windows.url>
+        <app.main.module>ch.eitchnet.luminelog</app.main.module>
+        <app.main.class>ch.eitchnet.luminelog.LumineLogApplication</app.main.class>
     </properties>
 
     <dependencies>
@@ -101,10 +103,19 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.15.0</version>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.5.0</version>
                 <configuration>
-                    <source>25</source>
-                    <target>25</target>
+                    <archive>
+                        <manifest>
+                            <mainClass>${app.main.class}</mainClass>
+                        </manifest>
+                    </archive>
                 </configuration>
             </plugin>
 
