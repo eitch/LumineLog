@@ -247,6 +247,41 @@
                     </plugin>
 
                     <plugin>
+                        <groupId>com.akathist.maven.plugins.launch4j</groupId>
+                        <artifactId>launch4j-maven-plugin</artifactId>
+                        <version>2.7.0</version>
+                        <executions>
+                            <execution>
+                                <id>l4j-gui</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>launch4j</goal>
+                                </goals>
+                                <configuration>
+                                    <headerType>gui</headerType>
+                                    <outfile>target/LumineLog.exe</outfile>
+                                    <dontWrapJar>false</dontWrapJar>
+                                    <jar>target/${jarFinalName}-${project.version}.jar</jar>
+                                    <singleInstance>
+                                        <mutexName>LumineLog.exe</mutexName>
+                                        <windowTitle>LumineLog</windowTitle>
+                                    </singleInstance>
+                                    <errTitle>LumineLog</errTitle>
+                                    <classPath>
+                                        <mainClass>${app.main.class}</mainClass>
+                                    </classPath>
+                                    <jre>
+                                        <path>.</path>
+                                        <opts>
+                                            <opt>--enable-native-access=javafx.graphics</opt>
+                                        </opts>
+                                    </jre>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
                         <groupId>org.jreleaser</groupId>
                         <artifactId>jreleaser-maven-plugin</artifactId>
                         <version>1.23.0</version>
@@ -314,6 +349,14 @@
                                                         <multiRelease>${java.version}</multiRelease>
                                                         <ignoreMissingDeps>true</ignoreMissingDeps>
                                                     </jdeps>
+
+                                                    <artifacts>
+                                                        <artifact>
+                                                            <path>target/LumineLog.exe</path>
+                                                            <platform>windows</platform>
+                                                        </artifact>
+                                                    </artifacts>
+
                                                     <jar>
                                                         <pattern>target/libs/*.jar</pattern>
                                                     </jar>

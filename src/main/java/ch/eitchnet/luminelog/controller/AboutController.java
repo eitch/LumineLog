@@ -36,7 +36,7 @@ public class AboutController {
 
 	@FXML
 	public void initialize() {
-		InputStream logoImageStream = getClass().getResourceAsStream("/ch/eitchnet/luminelog/assets/logo.png");
+		InputStream logoImageStream = getClass().getResourceAsStream("/ch/eitchnet/luminelog/assets/LumineLog.png");
 		if (logoImageStream == null) {
 			DialogUtil.showError("Failed to load logo image");
 		} else {
