@@ -399,28 +399,38 @@ public class MainController {
 						logListView.scrollTo(lineCount - 1);
 					}
 				}
-				Node scrollBarNode = logListView.lookup(".scroll-bar:vertical");
-				if (scrollBarNode instanceof ScrollBar scrollBar) {
-					scrollBar.valueProperty().addListener((_, oldVal, newVal) -> {
-						if (tabPane.getSelectionModel().getSelectedItem() != tab)
-							return;
-
-						double value = newVal.doubleValue();
-						double max = scrollBar.getMax();
-						if (value >= max) {
-							if (!tailCheckBox.isSelected()) {
-								tailCheckBox.setSelected(true);
-							}
-						} else if (value < oldVal.doubleValue()) {
-							if (tailCheckBox.isSelected()) {
-								tailCheckBox.setSelected(false);
-							}
-						}
-					});
-				}
+				setupScrollBarListener(tab, logListView);
 			});
 		} catch (IOException e) {
 			DialogUtil.showError("Could not open file: " + e.getMessage());
+		}
+	}
+
+	private void setupScrollBarListener(Tab tab, ListView<LogLine> logListView) {
+		Node scrollBarNode = logListView.lookup(".scroll-bar:vertical");
+		if (scrollBarNode instanceof ScrollBar scrollBar) {
+			scrollBar.valueProperty().addListener((_, oldVal, newVal) -> {
+				if (tabPane.getSelectionModel().getSelectedItem() != tab)
+					return;
+
+				double value = newVal.doubleValue();
+				if (value < oldVal.doubleValue()) {
+					if (tailCheckBox.isSelected()) {
+						tailCheckBox.setSelected(false);
+					}
+				} else {
+					double max = scrollBar.getMax();
+					if (value >= max - 0.5) {
+						if (!tailCheckBox.isSelected()) {
+							tailCheckBox.setSelected(true);
+						}
+					}
+				}
+			});
+		} else {
+			if (tabPane.getTabs().contains(tab)) {
+				Platform.runLater(() -> setupScrollBarListener(tab, logListView));
+			}
 		}
 	}
 
@@ -457,7 +467,7 @@ public class MainController {
 		state.tailTimer.schedule(new TimerTask() {
 			@Override
 			public void run() {
-				if (tailCheckBox.isSelected() && state.logModel != null) {
+				if (state.logModel != null) {
 					try {
 						int oldCount = state.logModel.getLineCount();
 						state.logModel.updateIndex();
@@ -466,7 +476,7 @@ public class MainController {
 							Platform.runLater(() -> {
 								state.logItems.fireSizeChanged(oldCount, newCount);
 								updateHighlightsBar();
-								if (newCount > oldCount) {
+								if (tailCheckBox.isSelected() && newCount > oldCount) {
 									state.logListView.scrollTo(newCount - 1);
 								}
 							});
@@ -476,7 +486,7 @@ public class MainController {
 					}
 				}
 			}
-		}, 1000, 1000);
+		}, 50, 50);
 	}
 
 	@FXML
