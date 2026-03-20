@@ -49,7 +49,10 @@ public class AboutController {
 		}
 
 		// In a real app, version would be loaded from a properties file or manifest
-		versionLabel.setText("Version 0.1.0");
+		String version = getClass().getPackage().getImplementationVersion();
+		if (version == null)
+			version = "Development";
+		versionLabel.setText("Version " + version);
 	}
 
 	@FXML
