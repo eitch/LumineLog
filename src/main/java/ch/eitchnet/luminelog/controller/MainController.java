@@ -30,6 +30,7 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
@@ -58,6 +59,10 @@ public class MainController {
 	@FXML
 	private TabPane tabPane;
 	@FXML
+	private TabPane occurrencesTabPane;
+	@FXML
+	private SplitPane mainSplitPane;
+	@FXML
 	private TextField searchField;
 	@FXML
 	private CheckBox regexCheckBox;
@@ -74,7 +79,7 @@ public class MainController {
 
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
-	private final java.util.Map<HighlightRule, Stage> openOccurrenceStages = new java.util.HashMap<>();
+	private final java.util.Map<HighlightRule, Tab> openOccurrenceTabs = new java.util.HashMap<>();
 
 	private static class TabState {
 		File file;
@@ -112,6 +117,15 @@ public class MainController {
 		highlightColorPicker.setValue(Color.valueOf("#ff8080"));
 		loadHighlights(true);
 		highlightGroupComboBox.getSelectionModel().select(currentGroup);
+
+		occurrencesTabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
+			if (occurrencesTabPane.getTabs().isEmpty()) {
+				mainSplitPane.setDividerPositions(1.0);
+			} else if (mainSplitPane.getDividerPositions()[0] > 0.95) {
+				mainSplitPane.setDividerPositions(0.7);
+			}
+		});
+		mainSplitPane.setDividerPositions(1.0);
 
 		tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
 			if (newTab != null) {
@@ -635,8 +649,9 @@ public class MainController {
 	}
 
 	private void showOccurrences(HighlightRule rule) {
-		if (openOccurrenceStages.containsKey(rule)) {
-			openOccurrenceStages.get(rule).toFront();
+		if (openOccurrenceTabs.containsKey(rule)) {
+			tabPane.getSelectionModel().select(tabPane.getSelectionModel().getSelectedItem());
+			occurrencesTabPane.getSelectionModel().select(openOccurrenceTabs.get(rule));
 			return;
 		}
 
@@ -644,10 +659,10 @@ public class MainController {
 		if (state == null || state.logModel == null)
 			return;
 
-		Stage stage = new Stage();
-		stage.setTitle("Searching occurrences for: " + rule.getPattern());
-		openOccurrenceStages.put(rule, stage);
-		stage.setOnCloseRequest(_ -> openOccurrenceStages.remove(rule));
+		Tab occurrenceTab = new Tab();
+		occurrenceTab.setText("Searching: " + rule.getPattern());
+		openOccurrenceTabs.put(rule, occurrenceTab);
+		occurrenceTab.setOnClosed(_ -> openOccurrenceTabs.remove(rule));
 
 		VBox layout = new VBox(10);
 		layout.setStyle("-fx-padding: 10;");
@@ -657,9 +672,9 @@ public class MainController {
 		progressBar.setMaxWidth(Double.MAX_VALUE);
 		layout.getChildren().addAll(header, progressBar);
 
-		Scene scene = new Scene(layout, 1000, 800);
-		stage.setScene(scene);
-		stage.show();
+		occurrenceTab.setContent(layout);
+		occurrencesTabPane.getTabs().add(occurrenceTab);
+		occurrencesTabPane.getSelectionModel().select(occurrenceTab);
 
 		new Thread(() -> {
 			List<LogLine> occurrences = new ArrayList<>();
@@ -680,8 +695,8 @@ public class MainController {
 				});
 			} catch (IOException e) {
 				Platform.runLater(() -> {
-					openOccurrenceStages.remove(rule);
-					stage.close();
+					openOccurrenceTabs.remove(rule);
+					occurrencesTabPane.getTabs().remove(occurrenceTab);
 					DialogUtil.showError("Error searching for occurrences: " + e.getMessage());
 				});
 				return;
@@ -690,8 +705,8 @@ public class MainController {
 			Platform.runLater(() -> {
 				progressBar.setProgress(1.0);
 				if (occurrences.isEmpty()) {
-					openOccurrenceStages.remove(rule);
-					stage.close();
+					openOccurrenceTabs.remove(rule);
+					occurrencesTabPane.getTabs().remove(occurrenceTab);
 					Alert alert = new Alert(Alert.AlertType.INFORMATION);
 					alert.setTitle("No Occurrences");
 					alert.setHeaderText(null);
@@ -700,7 +715,7 @@ public class MainController {
 					return;
 				}
 
-				stage.setTitle("Occurrences for: " + rule.getPattern());
+				occurrenceTab.setText(rule.getPattern());
 				header.setText("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
 
 				ListView<LogLine> listView = new ListView<>(FXCollections.observableArrayList(occurrences));
@@ -717,7 +732,7 @@ public class MainController {
 					}
 				});
 
-				VBox.setVgrow(listView, javafx.scene.layout.Priority.ALWAYS);
+				VBox.setVgrow(listView, Priority.ALWAYS);
 				layout.getChildren().remove(progressBar);
 				layout.getChildren().add(listView);
 			});

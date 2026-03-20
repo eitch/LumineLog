@@ -37,8 +37,10 @@
     </HBox>
 
     <FlowPane fx:id="highlightsPane" hgap="10" vgap="5" style="-fx-padding: 0 10 10 10;"/>
-
-    <TabPane fx:id="tabPane" VBox.vgrow="ALWAYS" tabClosingPolicy="UNAVAILABLE"/>
+    <SplitPane dividerPositions="0.8" orientation="VERTICAL" VBox.vgrow="ALWAYS" fx:id="mainSplitPane">
+        <TabPane fx:id="tabPane" tabClosingPolicy="ALL_TABS"/>
+        <TabPane fx:id="occurrencesTabPane" tabClosingPolicy="ALL_TABS"/>
+    </SplitPane>
 
     <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 5;">
         <Label fx:id="statusLabel" text="No file opened"/>
