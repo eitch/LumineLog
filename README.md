@@ -47,7 +47,12 @@ LumineLog is a modern, cross-platform log viewer application built with **JavaFX
 ### Building a package
 
 ```bash
-./mvnw clean package -DskipTests -Prelease
+# Provision JDKS:
+./mvnw -Pjdks
+# Copy JARs:
+./mvnw -Pjars
+# Assemble Jlink distributions
+./mvnw -Passemble -DskipTests
 ```
 
 ## License
