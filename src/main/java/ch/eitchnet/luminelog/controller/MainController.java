@@ -84,7 +84,7 @@ public class MainController {
 
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
-	private final java.util.Map<HighlightRule, Tab> openOccurrenceTabs = new java.util.HashMap<>();
+	private final java.util.Map<TabState, java.util.Map<HighlightRule, Tab>> openOccurrenceTabs = new java.util.HashMap<>();
 
 	private static class TabState {
 		File file;
@@ -94,6 +94,7 @@ public class MainController {
 		ListView<LogLine> logListView;
 		int[] highlightCounts;
 		int lastCountedLine = 0;
+		final java.util.Map<HighlightRule, javafx.collections.ObservableList<LogLine>> occurrenceLists = new java.util.HashMap<>();
 
 		TabState(File file, LogFileModel logModel, VirtualLogList logItems, ListView<LogLine> logListView) {
 			this.file = file;
@@ -149,6 +150,22 @@ public class MainController {
 					int lineCount = state.logItems.size();
 					if (lineCount > 0) {
 						state.logListView.scrollTo(lineCount - 1);
+					}
+				}
+			}
+		});
+
+		tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) change -> {
+			while (change.next()) {
+				if (change.wasRemoved()) {
+					for (Tab tab : change.getRemoved()) {
+						TabState state = (TabState) tab.getUserData();
+						if (state != null) {
+							java.util.Map<HighlightRule, Tab> ruleTabMap = openOccurrenceTabs.remove(state);
+							if (ruleTabMap != null) {
+								occurrencesTabPane.getTabs().removeAll(ruleTabMap.values());
+							}
+						}
 					}
 				}
 			}
@@ -529,6 +546,7 @@ public class MainController {
 							Platform.runLater(() -> {
 								state.logItems.fireSizeChanged(oldCount, newCount);
 								updateHighlightsBar();
+
 								if (tailCheckBox.isSelected() && newCount > oldCount) {
 									state.logListView.scrollTo(newCount - 1);
 								}
@@ -688,32 +706,57 @@ public class MainController {
 	}
 
 	private void showOccurrences(HighlightRule rule) {
-		if (openOccurrenceTabs.containsKey(rule)) {
-			tabPane.getSelectionModel().select(tabPane.getSelectionModel().getSelectedItem());
-			occurrencesTabPane.getSelectionModel().select(openOccurrenceTabs.get(rule));
-			return;
-		}
-
 		TabState state = getActiveTabState();
 		if (state == null || state.logModel == null)
 			return;
 
-		Tab occurrenceTab = new Tab();
-		occurrenceTab.setText("Searching: " + rule.getPattern());
-		openOccurrenceTabs.put(rule, occurrenceTab);
-		occurrenceTab.setOnClosed(_ -> openOccurrenceTabs.remove(rule));
+		java.util.Map<HighlightRule, Tab> ruleTabMap = openOccurrenceTabs.computeIfAbsent(state, _ -> new java.util.HashMap<>());
+		Tab occurrenceTab;
+		VBox layout;
+		Label header;
+		ProgressBar progressBar;
 
-		VBox layout = new VBox(10);
-		layout.setStyle("-fx-padding: 10;");
-		Label header = new Label("Searching for occurrences...");
-		header.setStyle("-fx-font-weight: bold;");
-		ProgressBar progressBar = new ProgressBar(0);
-		progressBar.setMaxWidth(Double.MAX_VALUE);
-		layout.getChildren().addAll(header, progressBar);
+		if (ruleTabMap.containsKey(rule)) {
+			occurrenceTab = ruleTabMap.get(rule);
+			occurrencesTabPane.getSelectionModel().select(occurrenceTab);
+			layout = (VBox) occurrenceTab.getContent();
+			header = (Label) layout.getChildren().get(0);
+			if (layout.getChildren().size() > 1 && layout.getChildren().get(1) instanceof ListView) {
+				layout.getChildren().remove(1); // remove the ListView to show progress
+			}
+			if (layout.getChildren().size() == 1) {
+				progressBar = new ProgressBar(0);
+				progressBar.setMaxWidth(Double.MAX_VALUE);
+				layout.getChildren().add(progressBar);
+			} else {
+				progressBar = (ProgressBar) layout.getChildren().get(1);
+			}
+			header.setText("Refreshing occurrences...");
+			progressBar.setProgress(0);
+		} else {
+			occurrenceTab = new Tab();
+			occurrenceTab.setText("Searching: " + rule.getPattern());
+			ruleTabMap.put(rule, occurrenceTab);
+			occurrenceTab.setOnClosed(_ -> {
+				ruleTabMap.remove(rule);
+				state.occurrenceLists.remove(rule);
+				if (ruleTabMap.isEmpty()) {
+					openOccurrenceTabs.remove(state);
+				}
+			});
 
-		occurrenceTab.setContent(layout);
-		occurrencesTabPane.getTabs().add(occurrenceTab);
-		occurrencesTabPane.getSelectionModel().select(occurrenceTab);
+			layout = new VBox(10);
+			layout.setStyle("-fx-padding: 10;");
+			header = new Label("Searching for occurrences...");
+			header.setStyle("-fx-font-weight: bold;");
+			progressBar = new ProgressBar(0);
+			progressBar.setMaxWidth(Double.MAX_VALUE);
+			layout.getChildren().addAll(header, progressBar);
+
+			occurrenceTab.setContent(layout);
+			occurrencesTabPane.getTabs().add(occurrenceTab);
+			occurrencesTabPane.getSelectionModel().select(occurrenceTab);
+		}
 
 		new Thread(() -> {
 			List<LogLine> occurrences = new ArrayList<>();
@@ -734,7 +777,9 @@ public class MainController {
 				});
 			} catch (IOException e) {
 				Platform.runLater(() -> {
-					openOccurrenceTabs.remove(rule);
+					ruleTabMap.remove(rule);
+					if (ruleTabMap.isEmpty())
+						openOccurrenceTabs.remove(state);
 					occurrencesTabPane.getTabs().remove(occurrenceTab);
 					DialogUtil.showError("Error searching for occurrences: " + e.getMessage());
 				});
@@ -744,7 +789,9 @@ public class MainController {
 			Platform.runLater(() -> {
 				progressBar.setProgress(1.0);
 				if (occurrences.isEmpty()) {
-					openOccurrenceTabs.remove(rule);
+					ruleTabMap.remove(rule);
+					if (ruleTabMap.isEmpty())
+						openOccurrenceTabs.remove(state);
 					occurrencesTabPane.getTabs().remove(occurrenceTab);
 					Alert alert = new Alert(Alert.AlertType.INFORMATION);
 					alert.setTitle("No Occurrences");
@@ -754,10 +801,14 @@ public class MainController {
 					return;
 				}
 
-				occurrenceTab.setText(rule.getPattern());
+				occurrenceTab.setText(rule.getPattern() + " (" + state.file.getName() + ")");
 				header.setText("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
 
-				ListView<LogLine> listView = new ListView<>(FXCollections.observableArrayList(occurrences));
+				javafx.collections.ObservableList<LogLine> observableOccurrences = FXCollections.observableArrayList(
+						occurrences);
+				state.occurrenceLists.put(rule, observableOccurrences);
+
+				ListView<LogLine> listView = new ListView<>(observableOccurrences);
 				listView.setCellFactory(getHighlightingCellCallback(rule));
 				setupCopyContextMenu(listView);
 				listView.setOnMouseClicked(event -> {
