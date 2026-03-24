@@ -10,8 +10,9 @@
 
     <MenuBar>
         <Menu text="File">
-            <MenuItem text="Open" onAction="#handleOpen"/>
-            <MenuItem text="Exit" onAction="#handleExit"/>
+            <MenuItem text="Open" onAction="#handleOpen" accelerator="Shortcut+O"/>
+            <MenuItem text="Close" onAction="#handleClose" accelerator="Shortcut+W"/>
+            <MenuItem text="Exit" onAction="#handleExit" accelerator="Shortcut+Q"/>
         </Menu>
         <Menu text="Edit">
             <MenuItem text="Reset Highlights" onAction="#handleResetHighlights"/>

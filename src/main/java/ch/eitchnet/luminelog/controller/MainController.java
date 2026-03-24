@@ -16,6 +16,7 @@
  */
 package ch.eitchnet.luminelog.controller;
 
+import ch.eitchnet.luminelog.LumineLogApplication;
 import ch.eitchnet.luminelog.model.*;
 import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
@@ -29,12 +30,7 @@ import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
-import javafx.scene.input.Clipboard;
-import javafx.scene.input.ClipboardContent;
-import javafx.scene.input.Dragboard;
-import javafx.scene.input.KeyCode;
-import javafx.scene.input.MouseButton;
-import javafx.scene.input.TransferMode;
+import javafx.scene.input.*;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -44,6 +40,7 @@ import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import javafx.stage.WindowEvent;
 import javafx.util.Callback;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -125,6 +122,10 @@ public class MainController {
 
 	@FXML
 	public void initialize() {
+		LumineLogApplication
+				.getPrimaryStage()
+				.addEventHandler(WindowEvent.WINDOW_CLOSE_REQUEST, _ -> this.handleExit());
+
 		Config config = configService.loadConfig();
 		fontSizeSpinner.setValueFactory(
 				new SpinnerValueFactory.IntegerSpinnerValueFactory(8, 72, config.getFontSize()));
@@ -439,6 +440,26 @@ public class MainController {
 		}
 	}
 
+	private void closeTab(Tab tab) {
+		TabState state = (TabState) tab.getUserData();
+		if (state != null) {
+			if (DialogUtil.showConfirmation("Close File", "Are you sure you want to close this file?",
+					state.file.getAbsolutePath())) {
+				state.stopTailing();
+				tabPane.getTabs().remove(tab);
+				saveHighlights();
+			}
+		}
+	}
+
+	@FXML
+	private void handleClose() {
+		Tab selectedTab = tabPane.getSelectionModel().getSelectedItem();
+		if (selectedTab != null) {
+			closeTab(selectedTab);
+		}
+	}
+
 	@FXML
 	private void handleOpen() {
 		FileChooser fileChooser = new FileChooser();
@@ -460,11 +481,7 @@ public class MainController {
 			Button closeBtn = new Button("×");
 			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
 			TabState state = new TabState(file, highlightGroup, logModel, logItems, logListView);
-			closeBtn.setOnAction(_ -> {
-				state.stopTailing();
-				tabPane.getTabs().remove(tab);
-				saveHighlights();
-			});
+			closeBtn.setOnAction(_ -> closeTab(tab));
 			HBox graphic = new HBox(tabLabel, closeBtn);
 			graphic.setAlignment(Pos.CENTER);
 			tab.setGraphic(graphic);
@@ -473,8 +490,7 @@ public class MainController {
 
 			graphic.setOnMouseReleased(event -> {
 				if (event.getButton() == MouseButton.MIDDLE) {
-					state.stopTailing();
-					tabPane.getTabs().remove(tab);
+					closeTab(tab);
 				}
 			});
 			tab.setUserData(state);
@@ -1115,14 +1131,17 @@ public class MainController {
 
 	@FXML
 	private void handleExit() {
-		saveHighlights();
-		for (Tab tab : tabPane.getTabs()) {
-			TabState state = (TabState) tab.getUserData();
-			if (state != null) {
-				state.stopTailing();
+		if (DialogUtil.showConfirmation("Exit LumineLog", "Exit LumineLog",
+				"Are you sure you want to exit LumineLog?")) {
+			saveHighlights();
+			for (Tab tab : tabPane.getTabs()) {
+				TabState state = (TabState) tab.getUserData();
+				if (state != null) {
+					state.stopTailing();
+				}
 			}
+			Platform.exit();
 		}
-		Platform.exit();
 	}
 
 	private String toWebColor(Color color) {

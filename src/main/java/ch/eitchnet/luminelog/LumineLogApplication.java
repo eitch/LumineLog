@@ -29,6 +29,7 @@ import java.util.Objects;
 
 public class LumineLogApplication extends Application {
 	private static HostServices hostServices;
+	private static Stage primaryStage;
 
 	public static HostServices getAppHostServices() {
 		return hostServices;
@@ -36,9 +37,9 @@ public class LumineLogApplication extends Application {
 
 	@Override
 	public void start(Stage stage) throws IOException {
+		setPrimaryStage(stage);
 		hostServices = getHostServices();
-		stage.getIcons()
-				.add(new Image(Objects.requireNonNull(getClass().getResourceAsStream("assets/LumineLog.png"))));
+		stage.getIcons().add(new Image(Objects.requireNonNull(getClass().getResourceAsStream("assets/LumineLog.png"))));
 
 		FXMLLoader loader = new FXMLLoader(getClass().getResource("view/main.fxml"));
 		Parent root = loader.load();
@@ -46,6 +47,14 @@ public class LumineLogApplication extends Application {
 		stage.setScene(scene);
 		stage.setTitle("LumineLog");
 		stage.show();
+	}
+
+	public static Stage getPrimaryStage() {
+		return primaryStage;
+	}
+
+	private void setPrimaryStage(Stage primaryStage) {
+		LumineLogApplication.primaryStage = primaryStage;
 	}
 
 	void main() {
