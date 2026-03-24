@@ -471,6 +471,14 @@ public class MainController {
 	}
 
 	private void openFile(File file, String highlightGroup) {
+		for (Tab existingTab : tabPane.getTabs()) {
+			TabState state = (TabState) existingTab.getUserData();
+			if (state != null && state.file.equals(file)) {
+				tabPane.getSelectionModel().select(existingTab);
+				return;
+			}
+		}
+
 		try {
 			LogFileModel logModel = new LogFileModel(file.toPath());
 			VirtualLogList logItems = new VirtualLogList(logModel);
