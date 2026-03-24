@@ -22,12 +22,22 @@ import java.util.List;
 public class Config {
 	private String lastOpenFile;
 	private String lastGroup;
+	private int fontSize;
 	private List<HighlightGroup> highlightGroups;
 
-	public Config(String lastOpenFile, String lastGroup, List<HighlightGroup> highlightGroups) {
+	public Config(String lastOpenFile, String lastGroup, int fontSize, List<HighlightGroup> highlightGroups) {
 		this.lastOpenFile = lastOpenFile;
 		this.lastGroup = lastGroup;
+		this.fontSize = fontSize;
 		this.highlightGroups = highlightGroups != null ? highlightGroups : new ArrayList<>();
+	}
+
+	public int getFontSize() {
+		return fontSize;
+	}
+
+	public void setFontSize(int fontSize) {
+		this.fontSize = fontSize;
 	}
 
 	public String getLastOpenFile() {

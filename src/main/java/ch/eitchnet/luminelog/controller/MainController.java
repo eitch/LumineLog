@@ -48,11 +48,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class MainController {
@@ -78,13 +74,16 @@ public class MainController {
 	@FXML
 	private CheckBox tailCheckBox;
 	@FXML
+	private Spinner<Integer> fontSizeSpinner;
+	@FXML
 	private ComboBox<String> highlightGroupComboBox;
 	@FXML
 	private javafx.scene.layout.FlowPane highlightsPane;
 
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
-	private final java.util.Map<TabState, java.util.Map<HighlightRule, Tab>> openOccurrenceTabs = new java.util.HashMap<>();
+	private final java.util.Map<TabState, java.util.Map<HighlightRule, Tab>> openOccurrenceTabs
+			= new java.util.HashMap<>();
 
 	private static class TabState {
 		File file;
@@ -94,7 +93,6 @@ public class MainController {
 		ListView<LogLine> logListView;
 		int[] highlightCounts;
 		int lastCountedLine = 0;
-		final java.util.Map<HighlightRule, javafx.collections.ObservableList<LogLine>> occurrenceLists = new java.util.HashMap<>();
 
 		TabState(File file, LogFileModel logModel, VirtualLogList logItems, ListView<LogLine> logListView) {
 			this.file = file;
@@ -120,6 +118,17 @@ public class MainController {
 
 	@FXML
 	public void initialize() {
+		Config config = configService.loadConfig();
+		fontSizeSpinner.setValueFactory(
+				new SpinnerValueFactory.IntegerSpinnerValueFactory(8, 72, config.getFontSize()));
+		fontSizeSpinner.valueProperty().addListener((_, _, _) -> {
+			saveHighlights();
+			TabState state = getActiveTabState();
+			if (state != null) {
+				state.logListView.refresh();
+			}
+		});
+
 		highlightColorPicker.setValue(Color.valueOf("#ff8080"));
 		loadHighlights(true);
 		highlightGroupComboBox.getSelectionModel().select(currentGroup);
@@ -207,7 +216,7 @@ public class MainController {
 		}
 
 		Config newConfig = new Config(getActiveTabState() != null ? getActiveTabState().file.getAbsolutePath() :
-				currentConfig.getLastOpenFile(), currentGroup, groups);
+				currentConfig.getLastOpenFile(), currentGroup, fontSizeSpinner.getValue(), groups);
 
 		configService.saveConfig(newConfig);
 	}
@@ -710,7 +719,8 @@ public class MainController {
 		if (state == null || state.logModel == null)
 			return;
 
-		java.util.Map<HighlightRule, Tab> ruleTabMap = openOccurrenceTabs.computeIfAbsent(state, _ -> new java.util.HashMap<>());
+		java.util.Map<HighlightRule, Tab> ruleTabMap = openOccurrenceTabs.computeIfAbsent(state,
+				_ -> new java.util.HashMap<>());
 		Tab occurrenceTab;
 		VBox layout;
 		Label header;
@@ -739,7 +749,6 @@ public class MainController {
 			ruleTabMap.put(rule, occurrenceTab);
 			occurrenceTab.setOnClosed(_ -> {
 				ruleTabMap.remove(rule);
-				state.occurrenceLists.remove(rule);
 				if (ruleTabMap.isEmpty()) {
 					openOccurrenceTabs.remove(state);
 				}
@@ -806,7 +815,6 @@ public class MainController {
 
 				javafx.collections.ObservableList<LogLine> observableOccurrences = FXCollections.observableArrayList(
 						occurrences);
-				state.occurrenceLists.put(rule, observableOccurrences);
 
 				ListView<LogLine> listView = new ListView<>(observableOccurrences);
 				listView.setCellFactory(getHighlightingCellCallback(rule));
@@ -841,11 +849,12 @@ public class MainController {
 							return;
 
 						TextFlow textFlow = createTextFlow(item);
+						int fontSize = fontSizeSpinner.getValue();
+						String style = "-fx-font-family: 'monospace'; -fx-font-size: " + fontSize + "; -fx-padding: 0;";
 
 						String content = item.content();
 						if (highlightRules.isEmpty()) {
-							addText(content, "-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;",
-									textFlow);
+							addText(content, style, textFlow);
 						} else {
 							// Find all matches for all rules
 							List<MatchWithColor> matches = findMatches(content);
@@ -858,16 +867,15 @@ public class MainController {
 
 								// Add non-highlighted part
 								if (match.start > lastEnd)
-									addText(content.substring(lastEnd, match.start),
-											"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;",
-											textFlow);
+									addText(content.substring(lastEnd, match.start), style, textFlow);
 
 								Label highlightLabel = new Label(content.substring(match.start, match.end));
 								highlightLabel.setMinHeight(Region.USE_PREF_SIZE);
-								highlightLabel.setStyle(
-										"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-background-color: "
-												+ match.color
-												+ "; -fx-padding: 0;");
+								highlightLabel.setStyle("-fx-font-family: 'monospace'; -fx-font-size: "
+										+ fontSize
+										+ "; -fx-background-color: "
+										+ match.color
+										+ "; -fx-padding: 0;");
 								textFlow.getChildren().add(highlightLabel);
 
 								lastEnd = match.end;
@@ -875,13 +883,12 @@ public class MainController {
 
 							// Add remaining part
 							if (lastEnd < content.length()) {
-								addText(content.substring(lastEnd),
-										"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+								addText(content.substring(lastEnd), style, textFlow);
 							}
 						}
 
 						setGraphic(textFlow);
-						setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;");
+						setStyle(style);
 					}
 				};
 			}
@@ -897,6 +904,8 @@ public class MainController {
 					return;
 
 				TextFlow textFlow = createTextFlow(item);
+				int fontSize = fontSizeSpinner.getValue();
+				String style = "-fx-font-family: 'monospace'; -fx-font-size: " + fontSize + "; -fx-padding: 0;";
 
 				String content = item.content();
 				// Find all matches for this specific rule (which is 'rule' from showOccurrences)
@@ -904,24 +913,24 @@ public class MainController {
 				int lastEnd = 0;
 				for (HighlightRule.MatchRange range : ranges) {
 					if (range.start() > lastEnd) {
-						addText(content.substring(lastEnd, range.start()),
-								"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+						addText(content.substring(lastEnd, range.start()), style, textFlow);
 					}
 					Label highlightLabel = new Label(content.substring(range.start(), range.end()));
 					highlightLabel.setMinHeight(Region.USE_PREF_SIZE);
-					highlightLabel.setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-background-color: "
+					highlightLabel.setStyle("-fx-font-family: 'monospace'; -fx-font-size: "
+							+ fontSize
+							+ "; -fx-background-color: "
 							+ rule.getColor()
 							+ "; -fx-padding: 0;");
 					textFlow.getChildren().add(highlightLabel);
 					lastEnd = range.end();
 				}
 				if (lastEnd < content.length()) {
-					addText(content.substring(lastEnd),
-							"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;", textFlow);
+					addText(content.substring(lastEnd), style, textFlow);
 				}
 
 				setGraphic(textFlow);
-				setStyle("-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-padding: 0;");
+				setStyle(style);
 			}
 		};
 	}
@@ -1008,7 +1017,7 @@ public class MainController {
 				// Save the default config directly
 				TabState state = getActiveTabState();
 				if (state != null) {
-					defaultConfig = new Config(state.file.getAbsolutePath(), currentGroup,
+					defaultConfig = new Config(state.file.getAbsolutePath(), currentGroup, fontSizeSpinner.getValue(),
 							defaultConfig.getHighlightGroups());
 				}
 				configService.saveConfig(defaultConfig);
@@ -1031,7 +1040,8 @@ public class MainController {
 			FXMLLoader loader = new FXMLLoader(getClass().getResource("/ch/eitchnet/luminelog/view/about.fxml"));
 			Parent root = loader.load();
 			Stage stage = new Stage();
-			stage.getIcons()
+			stage
+					.getIcons()
 					.add(new Image(Objects.requireNonNull(
 							getClass().getResourceAsStream("/ch/eitchnet/luminelog/assets/LumineLog.png"))));
 			stage.setTitle("About LumineLog");

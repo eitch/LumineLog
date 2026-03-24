@@ -45,6 +45,9 @@
         <Label fx:id="statusLabel" text="No file opened"/>
         <Separator orientation="VERTICAL"/>
         <CheckBox fx:id="tailCheckBox" text="Follow Tail" selected="true"/>
+        <Separator orientation="VERTICAL"/>
+        <Label text="Font Size:"/>
+        <Spinner fx:id="fontSizeSpinner" prefWidth="70" editable="true"/>
     </HBox>
 
 </VBox>

@@ -38,6 +38,7 @@ public class ConfigService {
 
 	private static final String APP_NAME = "LumineLog";
 	private static final String CONFIG_FILE_NAME = "config.json";
+	public static final int DEFAULT_FONT_SIZE = getFontSize();
 
 	private final Gson gson;
 	private final Path configPath;
@@ -52,6 +53,8 @@ public class ConfigService {
 			try (FileReader reader = new FileReader(configPath.toFile())) {
 				Config config = gson.fromJson(reader, Config.class);
 				if (config != null) {
+					if (config.getFontSize() == 0)
+						config.setFontSize(DEFAULT_FONT_SIZE);
 					return config;
 				}
 			} catch (IOException e) {
@@ -101,6 +104,10 @@ public class ConfigService {
 				new HighlightRule("Exception", "#ff00ff", false));
 		HighlightGroup defaultGroup = new HighlightGroup("Default", List.of());
 		HighlightGroup sl4jGroup = new HighlightGroup("Slf4j", defaultRules);
-		return new Config(null, "Default", List.of(defaultGroup, sl4jGroup));
+		return new Config(null, "Default", DEFAULT_FONT_SIZE, List.of(defaultGroup, sl4jGroup));
+	}
+
+	private static int getFontSize() {
+		return 12;
 	}
 }
