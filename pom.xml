@@ -147,7 +147,7 @@
                                     <issues>
                                         <enabled>true</enabled>
                                     </issues>
-                                    <previousTagName>0.2.0</previousTagName>
+                                    <previousTagName>v0.2.0</previousTagName>
                                     <changelog>
                                         <formatted>ALWAYS</formatted>
                                         <contentTemplate>src/jreleaser/changelog.tpl</contentTemplate>
