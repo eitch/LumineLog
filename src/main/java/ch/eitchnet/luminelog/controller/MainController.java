@@ -28,6 +28,9 @@ import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.input.Clipboard;
+import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
@@ -448,9 +451,43 @@ public class MainController {
 		}
 	}
 
+	private void copyToClipboard(String text) {
+		if (text != null && !text.isEmpty()) {
+			Clipboard clipboard = Clipboard.getSystemClipboard();
+			ClipboardContent content = new ClipboardContent();
+			content.putString(text);
+			clipboard.setContent(content);
+		}
+	}
+
+	private void setupCopyContextMenu(ListView<LogLine> listView) {
+		ContextMenu contextMenu = new ContextMenu();
+		MenuItem copyItem = new MenuItem("Copy Line");
+		copyItem.setOnAction(_ -> {
+			LogLine selected = listView.getSelectionModel().getSelectedItem();
+			if (selected != null) {
+				copyToClipboard(selected.content());
+			}
+		});
+		contextMenu.getItems().add(copyItem);
+
+		listView.setContextMenu(contextMenu);
+
+		// Optional: Keyboard shortcut for copy
+		listView.setOnKeyPressed(event -> {
+			if (event.isControlDown() && event.getCode() == KeyCode.C) {
+				LogLine selected = listView.getSelectionModel().getSelectedItem();
+				if (selected != null) {
+					copyToClipboard(selected.content());
+				}
+			}
+		});
+	}
+
 	private ListView<LogLine> createLogListView() {
 		ListView<LogLine> logListView = new ListView<>();
 		logListView.setCellFactory(getHighlightingCellCallback());
+		setupCopyContextMenu(logListView);
 		return logListView;
 	}
 
@@ -720,7 +757,7 @@ public class MainController {
 
 				ListView<LogLine> listView = new ListView<>(FXCollections.observableArrayList(occurrences));
 				listView.setCellFactory(getHighlightingCellCallback(rule));
-
+				setupCopyContextMenu(listView);
 				listView.setOnMouseClicked(event -> {
 					if (event.getClickCount() == 2) {
 						LogLine selected = listView.getSelectionModel().getSelectedItem();
