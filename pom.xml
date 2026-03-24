@@ -6,7 +6,7 @@
 
     <groupId>ch.eitchnet</groupId>
     <artifactId>LumineLog</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
+    <version>0.3.0-SNAPSHOT</version>
     <name>LumineLog</name>
     <description>LumineLog is a JavaFX Log Viewer designed for high performance and low CPU overhead (especially during tailing)</description>
     <url>https://github.com/eitch/LumineLog</url>
