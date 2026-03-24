@@ -28,6 +28,7 @@ import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.image.Image;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
 import javafx.scene.input.KeyCode;
@@ -49,6 +50,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.stream.Collectors;
@@ -978,6 +980,9 @@ public class MainController {
 			FXMLLoader loader = new FXMLLoader(getClass().getResource("/ch/eitchnet/luminelog/view/about.fxml"));
 			Parent root = loader.load();
 			Stage stage = new Stage();
+			stage.getIcons()
+					.add(new Image(Objects.requireNonNull(
+							getClass().getResourceAsStream("/ch/eitchnet/luminelog/assets/LumineLog.png"))));
 			stage.setTitle("About LumineLog");
 			stage.setScene(new Scene(root));
 			stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
