@@ -151,19 +151,19 @@
                                     <changelog>
                                         <formatted>ALWAYS</formatted>
                                         <contentTemplate>src/jreleaser/changelog.tpl</contentTemplate>
-                                        <preset>gitmoji</preset>
-                                        <!--                                        <preset>conventional-commits</preset>-->
-                                        <!--                                        <contributors>-->
-                                        <!--                                            <format>- {{contributorName}}{{#contributorUsernameAsLink}} ({{.}}){{/contributorUsernameAsLink}}</format>-->
-                                        <!--                                        </contributors>-->
-                                        <!--                                        <extraProperties>-->
-                                        <!--                                            <categorizeScopes>true</categorizeScopes>-->
-                                        <!--                                        </extraProperties>-->
-                                        <!--                                        <hide>-->
-                                        <!--                                            <contributors>-->
-                                        <!--                                                GitHub-->
-                                        <!--                                            </contributors>-->
-                                        <!--                                        </hide>-->
+                                        <!--                                        <preset>gitmoji</preset>-->
+                                        <preset>conventional-commits</preset>
+                                        <contributors>
+                                            <format>- {{contributorName}}{{#contributorUsernameAsLink}} ({{.}}){{/contributorUsernameAsLink}}</format>
+                                        </contributors>
+                                        <extraProperties>
+                                            <categorizeScopes>true</categorizeScopes>
+                                        </extraProperties>
+                                        <hide>
+                                            <contributors>
+                                                GitHub
+                                            </contributors>
+                                        </hide>
                                         <append>
                                             <enabled>true</enabled>
                                         </append>
