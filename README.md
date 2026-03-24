@@ -47,12 +47,14 @@ mvn javafx:run
 ### Building a package
 
 ```bash
+# Clean:
+mvn clean
 # Provision JDKS:
 mvn -Pjdks
 # Copy JARs:
 mvn -Pjars
 # Assemble Jlink distributions
-mvn -Passemble -DskipTests
+mvn -Passemble
 ```
 
 ## License
