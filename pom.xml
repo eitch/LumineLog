@@ -135,23 +135,77 @@
                                 </maintainers>
                             </project>
 
+                            <!--                            <environment>-->
+                            <!--                                <variables>path/to/alternate/config.properties</variables>-->
+                            <!--                            </environment>-->
+
                             <release>
                                 <github>
                                     <overwrite>true</overwrite>
-                                    <sign>true</sign>
+                                    <!--                                    <sign>true</sign>-->
+                                    <discussionCategoryName>Announcements</discussionCategoryName>
+                                    <issues>
+                                        <enabled>true</enabled>
+                                    </issues>
+                                    <previousTagName>0.2.0</previousTagName>
+                                    <changelog>
+                                        <formatted>ALWAYS</formatted>
+                                        <contentTemplate>src/jreleaser/changelog.tpl</contentTemplate>
+                                        <preset>gitmoji</preset>
+                                        <!--                                        <preset>conventional-commits</preset>-->
+                                        <!--                                        <contributors>-->
+                                        <!--                                            <format>- {{contributorName}}{{#contributorUsernameAsLink}} ({{.}}){{/contributorUsernameAsLink}}</format>-->
+                                        <!--                                        </contributors>-->
+                                        <!--                                        <extraProperties>-->
+                                        <!--                                            <categorizeScopes>true</categorizeScopes>-->
+                                        <!--                                        </extraProperties>-->
+                                        <!--                                        <hide>-->
+                                        <!--                                            <contributors>-->
+                                        <!--                                                GitHub-->
+                                        <!--                                            </contributors>-->
+                                        <!--                                        </hide>-->
+                                        <append>
+                                            <enabled>true</enabled>
+                                        </append>
+                                    </changelog>
                                 </github>
                             </release>
 
-                            <signing>
-                                <active>ALWAYS</active>
-                                <pgp>
-                                    <active>ALWAYS</active>
-                                    <command>
-                                        <executable>gpg</executable>
-                                        <keyName>${gpg.keyname}</keyName>
-                                    </command>
-                                </pgp>
-                            </signing>
+                            <catalog>
+                                <sbom>
+                                    <syft>
+                                        <active>ALWAYS</active>
+                                        <pack>
+                                            <enabled>true</enabled>
+                                        </pack>
+                                    </syft>
+                                </sbom>
+                                <swid>
+                                    <swid-tag>
+                                        <active>ALWAYS</active>
+                                    </swid-tag>
+                                </swid>
+                            </catalog>
+
+                            <announce>
+                                <mastodon>
+                                    <active>RELEASE</active>
+                                    <host>https://mstdn.gsi.li</host>
+                                    <statusTemplate>src/jreleaser/mastodon.tpl</statusTemplate>
+                                </mastodon>
+                            </announce>
+
+                            <!--                            <signing>-->
+                            <!--                                <active>ALWAYS</active>-->
+                            <!--                                <armored>true</armored>-->
+                            <!--                                <pgp>-->
+                            <!--                                    <active>ALWAYS</active>-->
+                            <!--                                    <command>-->
+                            <!--                                        <executable>gpg</executable>-->
+                            <!--                                        <keyName>${gpg.keyname}</keyName>-->
+                            <!--                                    </command>-->
+                            <!--                                </pgp>-->
+                            <!--                            </signing>-->
 
                             <assemble>
                                 <jlink>
@@ -171,6 +225,9 @@
                                         <mainJar>
                                             <path>target/{{distributionName}}-{{projectVersion}}.jar</path>
                                         </mainJar>
+                                        <swid>
+                                            <tagRef>swid-tag</tagRef>
+                                        </swid>
                                         <jars>
                                             <jar>
                                                 <pattern>${project.build.directory}/repositories/universal/*.jar
