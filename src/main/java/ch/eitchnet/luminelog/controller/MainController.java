@@ -128,7 +128,7 @@ public class MainController {
 
 		Config config = configService.loadConfig();
 		fontSizeSpinner.setValueFactory(
-				new SpinnerValueFactory.IntegerSpinnerValueFactory(8, 72, config.getFontSize()));
+				new SpinnerValueFactory.IntegerSpinnerValueFactory(8, 32, config.getFontSize()));
 		fontSizeSpinner.valueProperty().addListener((_, _, _) -> {
 			saveHighlights();
 			TabState state = getActiveTabState();
