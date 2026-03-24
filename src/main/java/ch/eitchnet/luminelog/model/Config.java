@@ -20,13 +20,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class Config {
-	private String lastOpenFile;
+	private List<OpenFileInfo> openFiles;
 	private String lastGroup;
 	private int fontSize;
 	private List<HighlightGroup> highlightGroups;
 
-	public Config(String lastOpenFile, String lastGroup, int fontSize, List<HighlightGroup> highlightGroups) {
-		this.lastOpenFile = lastOpenFile;
+	public Config(List<OpenFileInfo> openFiles, String lastGroup, int fontSize, List<HighlightGroup> highlightGroups) {
+		this.openFiles = openFiles != null ? openFiles : new ArrayList<>();
 		this.lastGroup = lastGroup;
 		this.fontSize = fontSize;
 		this.highlightGroups = highlightGroups != null ? highlightGroups : new ArrayList<>();
@@ -40,12 +40,21 @@ public class Config {
 		this.fontSize = fontSize;
 	}
 
-	public String getLastOpenFile() {
-		return lastOpenFile;
+	public List<OpenFileInfo> getOpenFiles() {
+		if (openFiles == null) {
+			openFiles = new ArrayList<>();
+		}
+		return openFiles;
 	}
 
-	public void setLastOpenFile(String lastOpenFile) {
-		this.lastOpenFile = lastOpenFile;
+	public void setOpenFiles(List<OpenFileInfo> openFiles) {
+		this.openFiles = openFiles != null ? openFiles : new ArrayList<>();
+	}
+
+	public String getLastOpenFile() {
+		if (openFiles == null || openFiles.isEmpty())
+			return null;
+		return openFiles.getLast().filePath();
 	}
 
 	public String getLastGroup() {

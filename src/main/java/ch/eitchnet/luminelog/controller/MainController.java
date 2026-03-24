@@ -87,6 +87,7 @@ public class MainController {
 
 	private static class TabState {
 		File file;
+		String highlightGroup;
 		LogFileModel logModel;
 		VirtualLogList logItems;
 		Timer tailTimer;
@@ -94,8 +95,10 @@ public class MainController {
 		int[] highlightCounts;
 		int lastCountedLine = 0;
 
-		TabState(File file, LogFileModel logModel, VirtualLogList logItems, ListView<LogLine> logListView) {
+		TabState(File file, String highlightGroup, LogFileModel logModel, VirtualLogList logItems,
+				ListView<LogLine> logListView) {
 			this.file = file;
+			this.highlightGroup = highlightGroup;
 			this.logModel = logModel;
 			this.logItems = logItems;
 			this.logListView = logListView;
@@ -142,10 +145,20 @@ public class MainController {
 		});
 		mainSplitPane.setDividerPositions(1.0);
 
-		tabPane.getSelectionModel().selectedItemProperty().addListener((_, _, newTab) -> {
+		tabPane.getSelectionModel().selectedItemProperty().addListener((_, oldTab, newTab) -> {
+			if (oldTab != null && !ignoreGroupChange) {
+				saveHighlights();
+			}
+
 			if (newTab != null) {
 				TabState state = (TabState) newTab.getUserData();
 				statusLabel.setText("File: " + state.file.getAbsolutePath());
+
+				if (state.highlightGroup != null && !state.highlightGroup.equals(currentGroup)) {
+					currentGroup = state.highlightGroup;
+					loadHighlights(false);
+					highlightGroupComboBox.getSelectionModel().select(currentGroup);
+				}
 			} else {
 				statusLabel.setText("No file opened");
 			}
@@ -180,16 +193,18 @@ public class MainController {
 			}
 		});
 
-		Platform.runLater(this::loadLastFile);
+		Platform.runLater(this::loadLastFiles);
 	}
 
-	private void loadLastFile() {
+	private void loadLastFiles() {
 		Config config = configService.loadConfig();
-		String lastFile = config.getLastOpenFile();
-		if (lastFile != null) {
-			File file = new File(lastFile);
-			if (file.exists()) {
-				openFile(file);
+		List<OpenFileInfo> openFiles = config.getOpenFiles();
+		if (!openFiles.isEmpty()) {
+			for (OpenFileInfo openFileInfo : openFiles) {
+				File file = new File(openFileInfo.filePath());
+				if (file.exists()) {
+					openFile(file, openFileInfo.highlightGroup());
+				}
 			}
 		}
 	}
@@ -215,8 +230,14 @@ public class MainController {
 			groups.add(new HighlightGroup(groupName, rules));
 		}
 
-		Config newConfig = new Config(getActiveTabState() != null ? getActiveTabState().file.getAbsolutePath() :
-				currentConfig.getLastOpenFile(), currentGroup, fontSizeSpinner.getValue(), groups);
+		List<OpenFileInfo> openFiles = tabPane
+				.getTabs()
+				.stream()
+				.map(t -> (TabState) t.getUserData())
+				.map(s -> new OpenFileInfo(s.file.getAbsolutePath(), s.highlightGroup))
+				.toList();
+
+		Config newConfig = new Config(openFiles, currentGroup, fontSizeSpinner.getValue(), groups);
 
 		configService.saveConfig(newConfig);
 	}
@@ -281,9 +302,14 @@ public class MainController {
 		if (!highlightGroupComboBox.getItems().contains(currentGroup)) {
 			highlightGroupComboBox.getItems().add(currentGroup);
 		}
-		loadHighlights(false);
 
 		TabState state = getActiveTabState();
+		if (state != null) {
+			state.highlightGroup = currentGroup;
+		}
+
+		loadHighlights(false);
+
 		if (state != null) {
 			state.logListView.refresh();
 		}
@@ -392,11 +418,11 @@ public class MainController {
 		fileChooser.setTitle("Open Log File");
 		File file = fileChooser.showOpenDialog(tabPane.getScene().getWindow());
 		if (file != null) {
-			openFile(file);
+			openFile(file, currentGroup);
 		}
 	}
 
-	private void openFile(File file) {
+	private void openFile(File file, String highlightGroup) {
 		try {
 			LogFileModel logModel = new LogFileModel(file.toPath());
 			VirtualLogList logItems = new VirtualLogList(logModel);
@@ -406,10 +432,11 @@ public class MainController {
 			Label tabLabel = new Label(file.getName());
 			Button closeBtn = new Button("×");
 			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
-			TabState state = new TabState(file, logModel, logItems, logListView);
+			TabState state = new TabState(file, highlightGroup, logModel, logItems, logListView);
 			closeBtn.setOnAction(_ -> {
 				state.stopTailing();
 				tabPane.getTabs().remove(tab);
+				saveHighlights();
 			});
 			HBox graphic = new HBox(tabLabel, closeBtn);
 			graphic.setAlignment(Pos.CENTER);
@@ -1015,18 +1042,23 @@ public class MainController {
 				updateHighlightsBar();
 
 				// Save the default config directly
-				TabState state = getActiveTabState();
-				if (state != null) {
-					defaultConfig = new Config(state.file.getAbsolutePath(), currentGroup, fontSizeSpinner.getValue(),
-							defaultConfig.getHighlightGroups());
-				}
+				Config finalDefaultConfig = defaultConfig;
+				List<OpenFileInfo> openFiles = tabPane
+						.getTabs()
+						.stream()
+						.map(t -> (TabState) t.getUserData())
+						.map(s -> new OpenFileInfo(s.file.getAbsolutePath(), s.highlightGroup))
+						.toList();
+				defaultConfig = new Config(openFiles, currentGroup, fontSizeSpinner.getValue(),
+						finalDefaultConfig.getHighlightGroups());
 				configService.saveConfig(defaultConfig);
 
 				// Refresh the log view to apply the reset rules
-				if (state != null) {
-					state.highlightCounts = null;
-					state.lastCountedLine = 0;
-					state.logListView.refresh();
+				TabState activeTabState = getActiveTabState();
+				if (activeTabState != null) {
+					activeTabState.highlightCounts = null;
+					activeTabState.lastCountedLine = 0;
+					activeTabState.logListView.refresh();
 				}
 			} finally {
 				ignoreGroupChange = false;
