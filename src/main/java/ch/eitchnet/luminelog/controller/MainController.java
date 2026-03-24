@@ -31,8 +31,10 @@ import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
+import javafx.scene.input.Dragboard;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.MouseButton;
+import javafx.scene.input.TransferMode;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
@@ -57,6 +59,8 @@ public class MainController {
 
 	private final ConfigService configService = new ConfigService();
 
+	@FXML
+	private VBox rootContainer;
 	@FXML
 	private TabPane tabPane;
 	@FXML
@@ -194,6 +198,29 @@ public class MainController {
 		});
 
 		Platform.runLater(this::loadLastFiles);
+		setupDragAndDrop();
+	}
+
+	private void setupDragAndDrop() {
+		rootContainer.setOnDragOver(event -> {
+			if (event.getGestureSource() != rootContainer && event.getDragboard().hasFiles()) {
+				event.acceptTransferModes(TransferMode.COPY_OR_MOVE);
+			}
+			event.consume();
+		});
+
+		rootContainer.setOnDragDropped(event -> {
+			Dragboard db = event.getDragboard();
+			boolean success = false;
+			if (db.hasFiles()) {
+				for (File file : db.getFiles()) {
+					openFile(file, currentGroup);
+				}
+				success = true;
+			}
+			event.setDropCompleted(success);
+			event.consume();
+		});
 	}
 
 	private void loadLastFiles() {

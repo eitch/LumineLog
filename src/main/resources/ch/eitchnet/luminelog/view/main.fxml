@@ -4,6 +4,7 @@
 <?import javafx.scene.layout.*?>
 <VBox xmlns="http://javafx.com/javafx"
       xmlns:fx="http://javafx.com/fxml"
+      fx:id="rootContainer"
       fx:controller="ch.eitchnet.luminelog.controller.MainController"
       prefHeight="600.0" prefWidth="800.0">
 
