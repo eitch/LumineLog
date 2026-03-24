@@ -334,6 +334,8 @@
                                 <configuration>
                                     <outputDirectory>${project.build.directory}/repositories/universal</outputDirectory>
                                     <excludeClassifiers>mac,win,linux</excludeClassifiers>
+                                    <includeScope>compile</includeScope>
+                                    <includeScope>runtime</includeScope>
                                 </configuration>
                             </execution>
                             <execution>
@@ -345,6 +347,8 @@
                                 <configuration>
                                     <outputDirectory>${project.build.directory}/repositories/osx</outputDirectory>
                                     <classifier>mac</classifier>
+                                    <includeScope>compile</includeScope>
+                                    <includeScope>runtime</includeScope>
                                 </configuration>
                             </execution>
                             <execution>
@@ -356,6 +360,8 @@
                                 <configuration>
                                     <outputDirectory>${project.build.directory}/repositories/windows</outputDirectory>
                                     <classifier>win</classifier>
+                                    <includeScope>compile</includeScope>
+                                    <includeScope>runtime</includeScope>
                                 </configuration>
                             </execution>
                             <execution>
@@ -367,6 +373,8 @@
                                 <configuration>
                                     <outputDirectory>${project.build.directory}/repositories/linux</outputDirectory>
                                     <classifier>linux</classifier>
+                                    <includeScope>compile</includeScope>
+                                    <includeScope>runtime</includeScope>
                                 </configuration>
                             </execution>
                         </executions>
