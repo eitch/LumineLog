@@ -23,7 +23,6 @@
     <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 10;">
         <Button text="Open" onAction="#handleOpen"/>
         <Separator orientation="VERTICAL"/>
-        <Label text="Group:"/>
         <ComboBox fx:id="highlightGroupComboBox" onAction="#handleGroupChange"/>
         <Button text="+" onAction="#handleAddGroup"/>
         <Button text="-" onAction="#handleDeleteGroup"/>
