@@ -1,3 +1,22 @@
+## [v0.4.0]
+
+## Changelog
+
+- 24fc5fa [Project] Set new version 0.4.0
+- c68e244 [Fix] Adjust scroll threshold for tail checkbox activation
+- 0e638cb [Fix] Prevent window close when exit confirmation is canceled
+- 9271936 [Project] Bump version to 0.4.0-SNAPSHOT
+- 2f34b33 [Minor] Enhance README with new feature descriptions
+- d85a69f [Minor] Add #Java hashtag to Mastodon template
+- 10f289f [Project] Switch changelog preset to conventional commits
+- 8408eb4 [Project] Add initial CHANGELOG.md file
+- f67f30f [Minor] Simplify Mastodon announcement template
+- 7c41749 [Project] Correct tag name in JReleaser configuration
+
+## Contributors
+We'd like to thank the following people for their contributions:
+- Robert von Burg ([@eitch](https://github.com/eitch))
+
 ## [v0.3.0]
 
 ## Changelog
