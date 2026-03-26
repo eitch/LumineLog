@@ -122,9 +122,10 @@ public class MainController {
 
 	@FXML
 	public void initialize() {
-		LumineLogApplication
-				.getPrimaryStage()
-				.addEventHandler(WindowEvent.WINDOW_CLOSE_REQUEST, _ -> this.handleExit());
+		LumineLogApplication.getPrimaryStage().addEventHandler(WindowEvent.WINDOW_CLOSE_REQUEST, e -> {
+			if (!this.handleExit())
+				e.consume();
+		});
 
 		Config config = configService.loadConfig();
 		fontSizeSpinner.setValueFactory(
@@ -1138,18 +1139,21 @@ public class MainController {
 	}
 
 	@FXML
-	private void handleExit() {
-		if (DialogUtil.showConfirmation("Exit LumineLog", "Exit LumineLog",
+	private boolean handleExit() {
+		if (!DialogUtil.showConfirmation("Exit LumineLog", "Exit LumineLog",
 				"Are you sure you want to exit LumineLog?")) {
-			saveHighlights();
-			for (Tab tab : tabPane.getTabs()) {
-				TabState state = (TabState) tab.getUserData();
-				if (state != null) {
-					state.stopTailing();
-				}
-			}
-			Platform.exit();
+			return false;
 		}
+
+		saveHighlights();
+		for (Tab tab : tabPane.getTabs()) {
+			TabState state = (TabState) tab.getUserData();
+			if (state != null) {
+				state.stopTailing();
+			}
+		}
+		Platform.exit();
+		return true;
 	}
 
 	private String toWebColor(Color color) {
