@@ -544,7 +544,7 @@ public class MainController {
 					}
 				} else {
 					double max = scrollBar.getMax();
-					if (value >= max - 0.5) {
+					if (value >= max - 0.001) {
 						if (!tailCheckBox.isSelected()) {
 							tailCheckBox.setSelected(true);
 						}
