@@ -10,7 +10,11 @@ LumineLog is a modern, cross-platform log viewer application built with **JavaFX
   - Define **Highlight Groups** for different log formats (e.g., Slf4j, standard).
   - Use **Regex** or plain text rules to colorize log lines.
   - Interactive highlights bar: see occurrence counts and jump to specific matches.
-- **Multi-tab Interface**: Open and monitor multiple log files simultaneously in separate tabs.
+- **Multi-tab Interface**: Open and monitor multiple log files simultaneously in separate tabs. Supports closing tabs and confirmation on exit.
+- **Drag-and-Drop**: Easily open log files by dragging them onto the application window.
+- **Font Size Customization**: Adjust the log display font size on the fly with a dedicated UI control.
+- **Copy to Clipboard**: Quickly copy log lines to your clipboard via the context menu.
+- **Application Icon & About Dialog**: Professional look with a custom icon and an informative About dialog.
 - **Customizable**: Add, rename, or delete highlight groups and rules on the fly.
 - **Cross-platform Configuration**: Automatically saves your preferences (last opened file, highlights) in standard OS locations:
   - **Linux**: `~/.config/LumineLog/` (respects `XDG_CONFIG_HOME`)
