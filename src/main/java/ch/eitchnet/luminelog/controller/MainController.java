@@ -951,6 +951,14 @@ public class MainController {
 					if (event.getClickCount() == 2) {
 						LogLine selected = listView.getSelectionModel().getSelectedItem();
 						if (selected != null) {
+							// If the current tab is not for the same file, then the tab should switch
+							for (Tab tab : tabPane.getTabs()) {
+								if (tab.getUserData() == state) {
+									tabPane.getSelectionModel().select(tab);
+									break;
+								}
+							}
+
 							int index = selected.lineNumber() - 1;
 							state.logListView.getSelectionModel().select(index);
 							state.logListView.scrollTo(index);
