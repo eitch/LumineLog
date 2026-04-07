@@ -80,6 +80,8 @@ public class MainController {
 	private ComboBox<String> highlightGroupComboBox;
 	@FXML
 	private javafx.scene.layout.FlowPane highlightsPane;
+	@FXML
+	private Menu historyMenu;
 
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
@@ -140,6 +142,7 @@ public class MainController {
 
 		highlightColorPicker.setValue(Color.valueOf("#ff8080"));
 		loadHighlights(true);
+		updateHistoryMenu();
 		highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
 		occurrencesTabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
@@ -266,9 +269,54 @@ public class MainController {
 				.map(s -> new OpenFileInfo(s.file.getAbsolutePath(), s.highlightGroup))
 				.toList();
 
-		Config newConfig = new Config(openFiles, currentGroup, fontSizeSpinner.getValue(), groups);
+		Config newConfig = new Config(openFiles, currentConfig.getHistory(), currentGroup, fontSizeSpinner.getValue(),
+				groups);
 
 		configService.saveConfig(newConfig);
+	}
+
+	private void updateHistoryMenu() {
+		Config config = configService.loadConfig();
+		List<String> history = config.getHistory();
+		historyMenu.getItems().clear();
+		for (String filePath : history) {
+			MenuItem menuItem = new MenuItem(filePath);
+			menuItem.setOnAction(_ -> {
+				File file = new File(filePath);
+				if (file.exists()) {
+					openFile(file, currentGroup);
+					updateHistoryMenu();
+				} else {
+					DialogUtil.showError("The file " + filePath + " does not exist anymore.");
+					removeFromHistory(filePath);
+				}
+			});
+			historyMenu.getItems().add(menuItem);
+		}
+	}
+
+	private void removeFromHistory(String filePath) {
+		Config config = configService.loadConfig();
+		List<String> history = new ArrayList<>(config.getHistory());
+		if (history.remove(filePath)) {
+			config.setHistory(history);
+			configService.saveConfig(config);
+			updateHistoryMenu();
+		}
+	}
+
+	private void addToHistory(File file) {
+		String filePath = file.getAbsolutePath();
+		Config config = configService.loadConfig();
+		List<String> history = new ArrayList<>(config.getHistory());
+		history.remove(filePath);
+		history.addFirst(filePath);
+		if (history.size() > 16) {
+			history = history.subList(0, 16);
+		}
+		config.setHistory(history);
+		configService.saveConfig(config);
+		updateHistoryMenu();
 	}
 
 	private boolean ignoreGroupChange = false;
@@ -472,6 +520,7 @@ public class MainController {
 	}
 
 	private void openFile(File file, String highlightGroup) {
+		addToHistory(file);
 		for (Tab existingTab : tabPane.getTabs()) {
 			TabState state = (TabState) existingTab.getUserData();
 			if (state != null && state.file.equals(file)) {
@@ -1101,8 +1150,8 @@ public class MainController {
 						.map(t -> (TabState) t.getUserData())
 						.map(s -> new OpenFileInfo(s.file.getAbsolutePath(), s.highlightGroup))
 						.toList();
-				defaultConfig = new Config(openFiles, currentGroup, fontSizeSpinner.getValue(),
-						finalDefaultConfig.getHighlightGroups());
+				defaultConfig = new Config(openFiles, defaultConfig.getHistory(), currentGroup,
+						fontSizeSpinner.getValue(), finalDefaultConfig.getHighlightGroups());
 				configService.saveConfig(defaultConfig);
 
 				// Refresh the log view to apply the reset rules

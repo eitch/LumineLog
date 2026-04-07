@@ -11,6 +11,7 @@
     <MenuBar>
         <Menu text="File">
             <MenuItem text="Open" onAction="#handleOpen" accelerator="Shortcut+O"/>
+            <Menu fx:id="historyMenu" text="History"/>
             <MenuItem text="Close" onAction="#handleClose" accelerator="Shortcut+W"/>
             <MenuItem text="Exit" onAction="#handleExit" accelerator="Shortcut+Q"/>
         </Menu>

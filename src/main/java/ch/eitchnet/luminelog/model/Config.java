@@ -21,12 +21,15 @@ import java.util.List;
 
 public class Config {
 	private List<OpenFileInfo> openFiles;
+	private List<String> history;
 	private String lastGroup;
 	private int fontSize;
 	private List<HighlightGroup> highlightGroups;
 
-	public Config(List<OpenFileInfo> openFiles, String lastGroup, int fontSize, List<HighlightGroup> highlightGroups) {
+	public Config(List<OpenFileInfo> openFiles, List<String> history, String lastGroup, int fontSize,
+			List<HighlightGroup> highlightGroups) {
 		this.openFiles = openFiles != null ? openFiles : new ArrayList<>();
+		this.history = history != null ? history : new ArrayList<>();
 		this.lastGroup = lastGroup;
 		this.fontSize = fontSize;
 		this.highlightGroups = highlightGroups != null ? highlightGroups : new ArrayList<>();
@@ -49,6 +52,17 @@ public class Config {
 
 	public void setOpenFiles(List<OpenFileInfo> openFiles) {
 		this.openFiles = openFiles != null ? openFiles : new ArrayList<>();
+	}
+
+	public List<String> getHistory() {
+		if (history == null) {
+			history = new ArrayList<>();
+		}
+		return history;
+	}
+
+	public void setHistory(List<String> history) {
+		this.history = history != null ? history : new ArrayList<>();
 	}
 
 	public String getLastOpenFile() {

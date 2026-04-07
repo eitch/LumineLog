@@ -104,7 +104,7 @@ public class ConfigService {
 				new HighlightRule("Exception", "#ff00ff", false));
 		HighlightGroup defaultGroup = new HighlightGroup("Default", List.of());
 		HighlightGroup sl4jGroup = new HighlightGroup("Slf4j", defaultRules);
-		return new Config(List.of(), "Default", DEFAULT_FONT_SIZE, List.of(defaultGroup, sl4jGroup));
+		return new Config(List.of(), List.of(), "Default", DEFAULT_FONT_SIZE, List.of(defaultGroup, sl4jGroup));
 	}
 
 	private static int getFontSize() {

@@ -45,6 +45,8 @@ public class ConfigServiceTest {
 		Config config = configService.loadConfig();
 
 		assertNotNull(config);
+		assertNotNull(config.getHistory());
+		assertTrue(config.getHistory().isEmpty());
 		assertEquals("Default", config.getLastGroup());
 		List<HighlightGroup> groups = config.getHighlightGroups();
 		assertEquals(2, groups.size());
