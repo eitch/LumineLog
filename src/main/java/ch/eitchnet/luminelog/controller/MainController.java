@@ -47,6 +47,8 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -587,13 +589,18 @@ public class MainController {
 					return;
 
 				double value = newVal.doubleValue();
-				if (value < oldVal.doubleValue()) {
+				double precision = toPrecision(value, 8);
+				if (toPrecision(oldVal.doubleValue(), 8) == precision)
+					return;
+
+				double max = scrollBar.getMax();
+				if (precision < oldVal.doubleValue()) {
 					if (tailCheckBox.isSelected()) {
 						tailCheckBox.setSelected(false);
 					}
 				} else {
-					double max = scrollBar.getMax();
-					if (value >= max - 0.001) {
+					// TODO fix calculate to end of view
+					if (precision >= max - 0.0001) {
 						if (!tailCheckBox.isSelected()) {
 							tailCheckBox.setSelected(true);
 						}
@@ -605,6 +612,18 @@ public class MainController {
 				Platform.runLater(() -> setupScrollBarListener(tab, logListView));
 			}
 		}
+	}
+
+	public static double toPrecision(double value, int decimals) {
+		if (value == 0.0)
+			return 0.0;
+		if (Double.isNaN(value))
+			return Double.NaN;
+		if (value == Double.NEGATIVE_INFINITY)
+			return Double.NEGATIVE_INFINITY;
+		if (value == Double.POSITIVE_INFINITY)
+			return Double.POSITIVE_INFINITY;
+		return BigDecimal.valueOf(value).setScale(decimals, RoundingMode.HALF_EVEN).doubleValue();
 	}
 
 	private void copyToClipboard(String text) {
