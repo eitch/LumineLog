@@ -21,6 +21,7 @@ import ch.eitchnet.luminelog.model.*;
 import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.fxml.FXML;
 import javafx.fxml.FXMLLoader;
 import javafx.geometry.Insets;
@@ -126,98 +127,115 @@ public class MainController {
 
 	@FXML
 	public void initialize() {
-		LumineLogApplication.getPrimaryStage().addEventHandler(WindowEvent.WINDOW_CLOSE_REQUEST, e -> {
-			if (!this.handleExit())
-				e.consume();
-		});
+		LumineLogApplication
+				.getPrimaryStage()
+				.addEventHandler(WindowEvent.WINDOW_CLOSE_REQUEST, this::handleWindowCloseRequest);
 
-		Config config = configService.loadConfig();
-		fontSizeSpinner.setValueFactory(
+		Config config = this.configService.loadConfig();
+		this.fontSizeSpinner.setValueFactory(
 				new SpinnerValueFactory.IntegerSpinnerValueFactory(8, 32, config.getFontSize()));
-		fontSizeSpinner.valueProperty().addListener((_, _, _) -> {
-			saveHighlights();
-			TabState state = getActiveTabState();
-			if (state != null) {
-				state.logListView.refresh();
-			}
-		});
+		this.fontSizeSpinner.valueProperty().addListener((_, _, _) -> handleFontResize());
 
-		highlightColorPicker.setValue(Color.valueOf("#ff8080"));
+		this.highlightColorPicker.setValue(Color.valueOf("#ff8080"));
 		loadHighlights(true);
 		updateHistoryMenu();
-		highlightGroupComboBox.getSelectionModel().select(currentGroup);
+		this.highlightGroupComboBox.getSelectionModel().select(currentGroup);
 
-		occurrencesTabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) _ -> {
-			if (occurrencesTabPane.getTabs().isEmpty()) {
-				mainSplitPane.setDividerPositions(1.0);
-			} else if (mainSplitPane.getDividerPositions()[0] > 0.95) {
-				mainSplitPane.setDividerPositions(0.7);
-			}
-		});
-		mainSplitPane.setDividerPositions(1.0);
+		this.occurrencesTabPane
+				.getTabs()
+				.addListener((javafx.collections.ListChangeListener<Tab>) _ -> handleOcurrencesTabChanged());
+		this.mainSplitPane.setDividerPositions(1.0);
 
-		tabPane.getSelectionModel().selectedItemProperty().addListener((_, oldTab, newTab) -> {
-			if (oldTab != null && !ignoreGroupChange) {
-				saveHighlights();
-			}
+		this.tabPane
+				.getSelectionModel()
+				.selectedItemProperty()
+				.addListener((_, oldTab, newTab) -> handleActiveTabChanged(oldTab, newTab));
+		this.tabPane.getTabs().addListener(this::handleRemovedTabs);
 
-			if (newTab != null) {
-				TabState state = (TabState) newTab.getUserData();
-				statusLabel.setText("File: " + state.file.getAbsolutePath());
-
-				if (state.highlightGroup != null && !state.highlightGroup.equals(currentGroup)) {
-					currentGroup = state.highlightGroup;
-					loadHighlights(false);
-					highlightGroupComboBox.getSelectionModel().select(currentGroup);
-				}
-			} else {
-				statusLabel.setText("No file opened");
-			}
-			updateHighlightsBar();
-		});
-
-		tailCheckBox.selectedProperty().addListener((_, _, isSelected) -> {
-			if (isSelected) {
-				TabState state = getActiveTabState();
-				if (state != null) {
-					int lineCount = state.logItems.size();
-					if (lineCount > 0) {
-						state.logListView.scrollTo(lineCount - 1);
-					}
-				}
-			}
-		});
-
-		tabPane.getTabs().addListener((javafx.collections.ListChangeListener<Tab>) change -> {
-			while (change.next()) {
-				if (change.wasRemoved()) {
-					for (Tab tab : change.getRemoved()) {
-						TabState state = (TabState) tab.getUserData();
-						if (state != null) {
-							java.util.Map<HighlightRule, Tab> ruleTabMap = openOccurrenceTabs.remove(state);
-							if (ruleTabMap != null) {
-								occurrencesTabPane.getTabs().removeAll(ruleTabMap.values());
-							}
-						}
-					}
-				}
-			}
-		});
+		this.tailCheckBox.selectedProperty().addListener((_, _, isSelected) -> handleTailCheckBoxChanged(isSelected));
 
 		Platform.runLater(this::loadLastFiles);
 		setupDragAndDrop();
 	}
 
-	private void setupDragAndDrop() {
-		rootContainer.setOnDragOver(event -> {
-			if (event.getGestureSource() != rootContainer && event.getDragboard().hasFiles()) {
-				event.acceptTransferModes(TransferMode.COPY_OR_MOVE);
+	private void handleRemovedTabs(ListChangeListener.Change<? extends Tab> change) {
+		while (change.next()) {
+			if (!change.wasRemoved())
+				continue;
+
+			for (Tab tab : change.getRemoved()) {
+				TabState state = (TabState) tab.getUserData();
+				if (state == null)
+					continue;
+				Map<HighlightRule, Tab> ruleTabMap = this.openOccurrenceTabs.remove(state);
+				if (ruleTabMap != null)
+					this.occurrencesTabPane.getTabs().removeAll(ruleTabMap.values());
 			}
-			event.consume();
+		}
+	}
+
+	private void handleTailCheckBoxChanged(Boolean isSelected) {
+		if (!isSelected)
+			return;
+		TabState state = getActiveTabState();
+		if (state == null)
+			return;
+
+		int lineCount = state.logItems.size();
+		if (lineCount > 0)
+			state.logListView.scrollTo(lineCount - 1);
+	}
+
+	private void handleActiveTabChanged(Tab oldTab, Tab newTab) {
+		if (oldTab != null && !this.ignoreGroupChange)
+			saveHighlights();
+
+		if (newTab == null) {
+			this.statusLabel.setText("No file opened");
+		} else {
+			TabState state = (TabState) newTab.getUserData();
+			this.statusLabel.setText("File: " + state.file.getAbsolutePath());
+
+			if (state.highlightGroup != null && !state.highlightGroup.equals(this.currentGroup)) {
+				this.currentGroup = state.highlightGroup;
+				loadHighlights(false);
+				this.highlightGroupComboBox.getSelectionModel().select(this.currentGroup);
+			}
+		}
+
+		updateHighlightsBar();
+	}
+
+	private void handleOcurrencesTabChanged() {
+		if (this.occurrencesTabPane.getTabs().isEmpty()) {
+			this.mainSplitPane.setDividerPositions(1.0);
+		} else if (this.mainSplitPane.getDividerPositions()[0] > 0.95) {
+			this.mainSplitPane.setDividerPositions(0.7);
+		}
+	}
+
+	private void handleFontResize() {
+		saveHighlights();
+		TabState state = getActiveTabState();
+		if (state != null)
+			state.logListView.refresh();
+	}
+
+	private void handleWindowCloseRequest(WindowEvent e) {
+		if (!this.handleExit())
+			e.consume();
+	}
+
+	private void setupDragAndDrop() {
+		this.rootContainer.setOnDragOver(e -> {
+			if (e.getGestureSource() != this.rootContainer && e.getDragboard().hasFiles()) {
+				e.acceptTransferModes(TransferMode.COPY_OR_MOVE);
+			}
+			e.consume();
 		});
 
-		rootContainer.setOnDragDropped(event -> {
-			Dragboard db = event.getDragboard();
+		this.rootContainer.setOnDragDropped(e -> {
+			Dragboard db = e.getDragboard();
 			boolean success = false;
 			if (db.hasFiles()) {
 				for (File file : db.getFiles()) {
@@ -225,32 +243,32 @@ public class MainController {
 				}
 				success = true;
 			}
-			event.setDropCompleted(success);
-			event.consume();
+			e.setDropCompleted(success);
+			e.consume();
 		});
 	}
 
 	private void loadLastFiles() {
 		Config config = configService.loadConfig();
 		List<OpenFileInfo> openFiles = config.getOpenFiles();
-		if (!openFiles.isEmpty()) {
-			for (OpenFileInfo openFileInfo : openFiles) {
-				File file = new File(openFileInfo.filePath());
-				if (file.exists()) {
-					openFile(file, openFileInfo.highlightGroup());
-				}
-			}
+		if (openFiles.isEmpty())
+			return;
+
+		for (OpenFileInfo openFileInfo : openFiles) {
+			File file = new File(openFileInfo.filePath());
+			if (file.exists())
+				openFile(file, openFileInfo.highlightGroup());
 		}
 	}
 
 	private void saveHighlights() {
-		Config currentConfig = configService.loadConfig();
+		Config currentConfig = this.configService.loadConfig();
 
 		List<HighlightGroup> groups = new ArrayList<>();
-		for (String groupName : highlightGroupComboBox.getItems()) {
+		for (String groupName : this.highlightGroupComboBox.getItems()) {
 			List<HighlightRule> rules;
-			if (groupName.equals(currentGroup)) {
-				rules = new ArrayList<>(highlightRules);
+			if (groupName.equals(this.currentGroup)) {
+				rules = new ArrayList<>(this.highlightRules);
 			} else {
 				// Keep existing rules for other groups
 				rules = currentConfig
@@ -264,52 +282,54 @@ public class MainController {
 			groups.add(new HighlightGroup(groupName, rules));
 		}
 
-		List<OpenFileInfo> openFiles = tabPane
+		List<OpenFileInfo> openFiles = this.tabPane
 				.getTabs()
 				.stream()
 				.map(t -> (TabState) t.getUserData())
 				.map(s -> new OpenFileInfo(s.file.getAbsolutePath(), s.highlightGroup))
 				.toList();
 
-		Config newConfig = new Config(openFiles, currentConfig.getHistory(), currentGroup, fontSizeSpinner.getValue(),
-				groups);
+		Config newConfig = new Config(openFiles, currentConfig.getHistory(), this.currentGroup,
+				this.fontSizeSpinner.getValue(), groups);
 
-		configService.saveConfig(newConfig);
+		this.configService.saveConfig(newConfig);
 	}
 
 	private void updateHistoryMenu() {
-		Config config = configService.loadConfig();
+		Config config = this.configService.loadConfig();
 		List<String> history = config.getHistory();
-		historyMenu.getItems().clear();
+		this.historyMenu.getItems().clear();
 		for (String filePath : history) {
 			MenuItem menuItem = new MenuItem(filePath);
-			menuItem.setOnAction(_ -> {
-				File file = new File(filePath);
-				if (file.exists()) {
-					openFile(file, currentGroup);
-					updateHistoryMenu();
-				} else {
-					DialogUtil.showError("The file " + filePath + " does not exist anymore.");
-					removeFromHistory(filePath);
-				}
-			});
-			historyMenu.getItems().add(menuItem);
+			menuItem.setOnAction(_ -> handleHistoryMenuItemSelected(filePath));
+			this.historyMenu.getItems().add(menuItem);
+		}
+	}
+
+	private void handleHistoryMenuItemSelected(String filePath) {
+		File file = new File(filePath);
+		if (file.exists()) {
+			openFile(file, this.currentGroup);
+			updateHistoryMenu();
+		} else {
+			DialogUtil.showError("The file " + filePath + " does not exist anymore.");
+			removeFromHistory(filePath);
 		}
 	}
 
 	private void removeFromHistory(String filePath) {
-		Config config = configService.loadConfig();
+		Config config = this.configService.loadConfig();
 		List<String> history = new ArrayList<>(config.getHistory());
 		if (history.remove(filePath)) {
 			config.setHistory(history);
-			configService.saveConfig(config);
+			this.configService.saveConfig(config);
 			updateHistoryMenu();
 		}
 	}
 
 	private void addToHistory(File file) {
 		String filePath = file.getAbsolutePath();
-		Config config = configService.loadConfig();
+		Config config = this.configService.loadConfig();
 		List<String> history = new ArrayList<>(config.getHistory());
 		history.remove(filePath);
 		history.addFirst(filePath);
@@ -317,22 +337,22 @@ public class MainController {
 			history = history.subList(0, 16);
 		}
 		config.setHistory(history);
-		configService.saveConfig(config);
+		this.configService.saveConfig(config);
 		updateHistoryMenu();
 	}
 
 	private boolean ignoreGroupChange = false;
 
 	private void loadHighlights(boolean updateGroups) {
-		ignoreGroupChange = true;
+		this.ignoreGroupChange = true;
 		try {
-			Config config = configService.loadConfig();
+			Config config = this.configService.loadConfig();
 			logger.info("Loading highlights from JSON config");
 
-			if (currentGroup == null || currentGroup.isEmpty()) {
-				currentGroup = config.getLastGroup();
-				if (currentGroup == null)
-					currentGroup = "Default";
+			if (this.currentGroup == null || this.currentGroup.isEmpty()) {
+				this.currentGroup = config.getLastGroup();
+				if (this.currentGroup == null)
+					this.currentGroup = "Default";
 			}
 
 			if (updateGroups) {
@@ -344,54 +364,49 @@ public class MainController {
 
 				if (groupNames.isEmpty()) {
 					groupNames.add("Default");
-					currentGroup = "Default";
+					this.currentGroup = "Default";
 				}
 
-				highlightGroupComboBox.getItems().setAll(groupNames);
-				highlightGroupComboBox.getSelectionModel().select(currentGroup);
+				this.highlightGroupComboBox.getItems().setAll(groupNames);
+				this.highlightGroupComboBox.getSelectionModel().select(this.currentGroup);
 			}
 
-			highlightRules.clear();
+			this.highlightRules.clear();
 			config
 					.getHighlightGroups()
 					.stream()
-					.filter(g -> g.getName().equals(currentGroup))
+					.filter(g -> g.getName().equals(this.currentGroup))
 					.findFirst()
-					.ifPresent(g -> highlightRules.addAll(g.getRules()));
+					.ifPresent(g -> this.highlightRules.addAll(g.getRules()));
 
 			updateHighlightsBar();
 		} finally {
-			ignoreGroupChange = false;
+			this.ignoreGroupChange = false;
 		}
 	}
 
 	@FXML
 	private void handleGroupChange() {
-		if (ignoreGroupChange) {
+		if (this.ignoreGroupChange)
 			return;
-		}
 
-		String newGroup = highlightGroupComboBox.getValue();
-		if (newGroup == null || newGroup.isEmpty() || newGroup.equals(currentGroup)) {
+		String newGroup = this.highlightGroupComboBox.getValue();
+		if (newGroup == null || newGroup.isEmpty() || newGroup.equals(this.currentGroup))
 			return;
-		}
 
 		saveHighlights();
-		currentGroup = newGroup;
-		if (!highlightGroupComboBox.getItems().contains(currentGroup)) {
-			highlightGroupComboBox.getItems().add(currentGroup);
-		}
+		this.currentGroup = newGroup;
+		if (!this.highlightGroupComboBox.getItems().contains(this.currentGroup))
+			this.highlightGroupComboBox.getItems().add(this.currentGroup);
 
 		TabState state = getActiveTabState();
-		if (state != null) {
-			state.highlightGroup = currentGroup;
-		}
+		if (state != null)
+			state.highlightGroup = this.currentGroup;
 
 		loadHighlights(false);
 
-		if (state != null) {
+		if (state != null)
 			state.logListView.refresh();
-		}
 	}
 
 	@FXML
@@ -400,36 +415,12 @@ public class MainController {
 		dialog.setTitle("New Highlight Group");
 		dialog.setHeaderText("Create a new highlight group");
 		dialog.setContentText("Please enter the name of the new group:");
-
-		dialog.showAndWait().ifPresent(name -> {
-			String newGroup = name.trim();
-			if (newGroup.isEmpty()) {
-				DialogUtil.showError("Group name cannot be empty");
-				return;
-			}
-			if (highlightGroupComboBox.getItems().contains(newGroup)) {
-				DialogUtil.showError("Group '" + newGroup + "' already exists");
-				return;
-			}
-
-			saveHighlights();
-			ignoreGroupChange = true;
-			try {
-				currentGroup = newGroup;
-				highlightGroupComboBox.getItems().add(newGroup);
-				highlightGroupComboBox.getSelectionModel().select(newGroup);
-				highlightRules.clear();
-				updateHighlightsBar();
-				saveHighlights();
-			} finally {
-				ignoreGroupChange = false;
-			}
-		});
+		dialog.showAndWait().ifPresent(this::createNewGroup);
 	}
 
 	@FXML
 	private void handleRenameGroup() {
-		String oldGroup = highlightGroupComboBox.getValue();
+		String oldGroup = this.highlightGroupComboBox.getValue();
 		if (oldGroup == null || oldGroup.equals("Default")) {
 			DialogUtil.showError("The 'Default' group cannot be renamed.");
 			return;
@@ -439,32 +430,7 @@ public class MainController {
 		dialog.setTitle("Rename Highlight Group");
 		dialog.setHeaderText("Rename highlight group '" + oldGroup + "'");
 		dialog.setContentText("Please enter the new name for the group:");
-
-		dialog.showAndWait().ifPresent(name -> {
-			String newGroup = name.trim();
-			if (newGroup.isEmpty()) {
-				DialogUtil.showError("Group name cannot be empty");
-				return;
-			}
-			if (newGroup.equals(oldGroup)) {
-				return;
-			}
-			if (highlightGroupComboBox.getItems().contains(newGroup)) {
-				DialogUtil.showError("Group '" + newGroup + "' already exists");
-				return;
-			}
-
-			ignoreGroupChange = true;
-			try {
-				int index = highlightGroupComboBox.getItems().indexOf(oldGroup);
-				highlightGroupComboBox.getItems().set(index, newGroup);
-				highlightGroupComboBox.getSelectionModel().select(newGroup);
-				currentGroup = newGroup;
-				saveHighlights();
-			} finally {
-				ignoreGroupChange = false;
-			}
-		});
+		dialog.showAndWait().ifPresent(name -> renameGroup(name, oldGroup));
 	}
 
 	@FXML
@@ -478,47 +444,101 @@ public class MainController {
 		alert.setTitle("Delete Group");
 		alert.setHeaderText("Delete highlight group '" + groupToDelete + "'?");
 		alert.setContentText("This will remove all highlights in this group.");
-		if (alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK) {
-			ignoreGroupChange = true;
-			try {
-				highlightGroupComboBox.getItems().remove(groupToDelete);
-				currentGroup = "Default";
-				highlightGroupComboBox.getSelectionModel().select(currentGroup);
-				saveHighlights();
-			} finally {
-				ignoreGroupChange = false;
-			}
+		if (alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.OK)
+			deleteGroup(groupToDelete);
+	}
+
+	private void createNewGroup(String name) {
+		String newGroup = name.trim();
+		if (newGroup.isEmpty()) {
+			DialogUtil.showError("Group name cannot be empty");
+			return;
+		}
+
+		if (this.highlightGroupComboBox.getItems().contains(newGroup)) {
+			DialogUtil.showError("Group '" + newGroup + "' already exists");
+			return;
+		}
+
+		saveHighlights();
+		this.ignoreGroupChange = true;
+		try {
+			this.currentGroup = newGroup;
+			this.highlightGroupComboBox.getItems().add(newGroup);
+			this.highlightGroupComboBox.getSelectionModel().select(newGroup);
+			this.highlightRules.clear();
+			updateHighlightsBar();
+			saveHighlights();
+		} finally {
+			this.ignoreGroupChange = false;
+		}
+	}
+
+	private void renameGroup(String name, String oldGroup) {
+		String newGroup = name.trim();
+		if (newGroup.isEmpty()) {
+			DialogUtil.showError("Group name cannot be empty");
+			return;
+		}
+		if (newGroup.equals(oldGroup)) {
+			return;
+		}
+		if (highlightGroupComboBox.getItems().contains(newGroup)) {
+			DialogUtil.showError("Group '" + newGroup + "' already exists");
+			return;
+		}
+
+		ignoreGroupChange = true;
+		try {
+			int index = highlightGroupComboBox.getItems().indexOf(oldGroup);
+			highlightGroupComboBox.getItems().set(index, newGroup);
+			highlightGroupComboBox.getSelectionModel().select(newGroup);
+			currentGroup = newGroup;
+			saveHighlights();
+		} finally {
+			ignoreGroupChange = false;
+		}
+	}
+
+	private void deleteGroup(String groupToDelete) {
+		ignoreGroupChange = true;
+		try {
+			highlightGroupComboBox.getItems().remove(groupToDelete);
+			currentGroup = "Default";
+			highlightGroupComboBox.getSelectionModel().select(currentGroup);
+			saveHighlights();
+		} finally {
+			ignoreGroupChange = false;
 		}
 	}
 
 	private void closeTab(Tab tab) {
 		TabState state = (TabState) tab.getUserData();
-		if (state != null) {
-			if (DialogUtil.showConfirmation("Close File", "Are you sure you want to close this file?",
-					state.file.getAbsolutePath())) {
-				state.stopTailing();
-				tabPane.getTabs().remove(tab);
-				saveHighlights();
-			}
+		if (state == null)
+			return;
+
+		if (DialogUtil.showConfirmation("Close File", "Are you sure you want to close this file?",
+				state.file.getAbsolutePath())) {
+			state.stopTailing();
+			tabPane.getTabs().remove(tab);
+			saveHighlights();
 		}
 	}
 
 	@FXML
-	private void handleClose() {
+	private void handleTabClose() {
 		Tab selectedTab = tabPane.getSelectionModel().getSelectedItem();
-		if (selectedTab != null) {
+		if (selectedTab != null)
 			closeTab(selectedTab);
-		}
 	}
 
 	@FXML
-	private void handleOpen() {
+	private void handleFileOpen() {
 		FileChooser fileChooser = new FileChooser();
 		fileChooser.setTitle("Open Log File");
 		File file = fileChooser.showOpenDialog(tabPane.getScene().getWindow());
-		if (file != null) {
+		if (file != null)
 			openFile(file, currentGroup);
-		}
 	}
 
 	private void openFile(File file, String highlightGroup) {
@@ -549,9 +569,8 @@ public class MainController {
 			tab.setContent(logListView);
 
 			graphic.setOnMouseReleased(event -> {
-				if (event.getButton() == MouseButton.MIDDLE) {
+				if (event.getButton() == MouseButton.MIDDLE)
 					closeTab(tab);
-				}
 			});
 			tab.setUserData(state);
 			tab.setOnClosed(_ -> {
@@ -584,32 +603,35 @@ public class MainController {
 	private void setupScrollBarListener(Tab tab, ListView<LogLine> logListView) {
 		Node scrollBarNode = logListView.lookup(".scroll-bar:vertical");
 		if (scrollBarNode instanceof ScrollBar scrollBar) {
-			scrollBar.valueProperty().addListener((_, oldVal, newVal) -> {
-				if (tabPane.getSelectionModel().getSelectedItem() != tab)
-					return;
-
-				double value = newVal.doubleValue();
-				double precision = toPrecision(value, 8);
-				if (toPrecision(oldVal.doubleValue(), 8) == precision)
-					return;
-
-				double max = scrollBar.getMax();
-				if (precision < oldVal.doubleValue()) {
-					if (tailCheckBox.isSelected()) {
-						tailCheckBox.setSelected(false);
-					}
-				} else {
-					// TODO fix calculate to end of view
-					if (precision >= max - 0.0001) {
-						if (!tailCheckBox.isSelected()) {
-							tailCheckBox.setSelected(true);
-						}
-					}
-				}
-			});
+			scrollBar
+					.valueProperty()
+					.addListener((_, oldVal, newVal) -> handleScrollBarChanged(tab, scrollBar, oldVal, newVal));
 		} else {
 			if (tabPane.getTabs().contains(tab)) {
 				Platform.runLater(() -> setupScrollBarListener(tab, logListView));
+			}
+		}
+	}
+
+	private void handleScrollBarChanged(Tab tab, ScrollBar scrollBar, Number oldVal, Number newVal) {
+		if (tabPane.getSelectionModel().getSelectedItem() != tab)
+			return;
+
+		double value = newVal.doubleValue();
+		double precision = toPrecision(value, 8);
+		if (toPrecision(oldVal.doubleValue(), 8) == precision)
+			return;
+
+		double max = scrollBar.getMax();
+		if (precision < oldVal.doubleValue()) {
+			if (tailCheckBox.isSelected()) {
+				tailCheckBox.setSelected(false);
+			}
+		} else {
+			if (precision >= max - 0.0001) {
+				if (!tailCheckBox.isSelected()) {
+					tailCheckBox.setSelected(true);
+				}
 			}
 		}
 	}
@@ -627,12 +649,12 @@ public class MainController {
 	}
 
 	private void copyToClipboard(String text) {
-		if (text != null && !text.isEmpty()) {
-			Clipboard clipboard = Clipboard.getSystemClipboard();
-			ClipboardContent content = new ClipboardContent();
-			content.putString(text);
-			clipboard.setContent(content);
-		}
+		if (text == null || text.isEmpty())
+			return;
+		Clipboard clipboard = Clipboard.getSystemClipboard();
+		ClipboardContent content = new ClipboardContent();
+		content.putString(text);
+		clipboard.setContent(content);
 	}
 
 	private void setupCopyContextMenu(ListView<LogLine> listView) {
@@ -640,22 +662,20 @@ public class MainController {
 		MenuItem copyItem = new MenuItem("Copy Line");
 		copyItem.setOnAction(_ -> {
 			LogLine selected = listView.getSelectionModel().getSelectedItem();
-			if (selected != null) {
+			if (selected != null)
 				copyToClipboard(selected.content());
-			}
 		});
 		contextMenu.getItems().add(copyItem);
 
 		listView.setContextMenu(contextMenu);
 
 		// Optional: Keyboard shortcut for copy
-		listView.setOnKeyPressed(event -> {
-			if (event.isControlDown() && event.getCode() == KeyCode.C) {
-				LogLine selected = listView.getSelectionModel().getSelectedItem();
-				if (selected != null) {
-					copyToClipboard(selected.content());
-				}
-			}
+		listView.setOnKeyPressed(e -> {
+			if (!e.isControlDown() || e.getCode() != KeyCode.C)
+				return;
+			LogLine selected = listView.getSelectionModel().getSelectedItem();
+			if (selected != null)
+				copyToClipboard(selected.content());
 		});
 	}
 

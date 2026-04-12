@@ -10,9 +10,9 @@
 
     <MenuBar>
         <Menu text="File">
-            <MenuItem text="Open" onAction="#handleOpen" accelerator="Shortcut+O"/>
+            <MenuItem text="Open" onAction="#handleFileOpen" accelerator="Shortcut+O"/>
             <Menu fx:id="historyMenu" text="History"/>
-            <MenuItem text="Close" onAction="#handleClose" accelerator="Shortcut+W"/>
+            <MenuItem text="Close" onAction="#handleTabClose" accelerator="Shortcut+W"/>
             <MenuItem text="Exit" onAction="#handleExit" accelerator="Shortcut+Q"/>
         </Menu>
         <Menu text="Edit">
@@ -24,7 +24,7 @@
     </MenuBar>
 
     <HBox spacing="10" alignment="CENTER_LEFT" style="-fx-padding: 10;">
-        <Button text="Open" onAction="#handleOpen"/>
+        <Button text="Open" onAction="#handleFileOpen"/>
         <Separator orientation="VERTICAL"/>
         <ComboBox fx:id="highlightGroupComboBox" onAction="#handleGroupChange"/>
         <Button text="+" onAction="#handleAddGroup"/>
