@@ -61,6 +61,11 @@ mvn -Pjars
 mvn -Passemble
 ```
 
+## Releasing 
+```bash
+mvn jreleaser:full-release -Djreleaser.dryRun=true
+```
+
 ## License
 
 This project is licensed under the **GNU General Public License v2.0**. See the `LICENSE` file for details.
