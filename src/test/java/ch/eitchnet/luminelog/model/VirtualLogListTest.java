@@ -98,4 +98,27 @@ public class VirtualLogListTest {
 		assertEquals(1, list.get(0).lineNumber());
 		assertEquals("", list.get(1).content());
 	}
+
+	@Test
+	public void testTruncationWithSameLineCountClearsCache() throws IOException {
+		Path logFile = tempDir.resolve("trunc_same_count.log");
+		Files.writeString(logFile, "Line 1\nLine 2\n");
+
+		LogFileModel model = new LogFileModel(logFile);
+		VirtualLogList list = new VirtualLogList(model);
+
+		assertEquals(3, list.size());
+		assertEquals("Line 1", list.get(0).content());
+		assertEquals("Line 2", list.get(1).content());
+
+		// Truncate and rewrite with the same number of lines.
+		Files.writeString(logFile, "New 1\nNew 2\n");
+		model.updateIndex();
+		list.fireSizeChanged(3, 3);
+
+		assertEquals(3, list.size());
+		assertEquals("New 1", list.get(0).content());
+		assertEquals("New 2", list.get(1).content());
+		assertEquals("", list.get(2).content());
+	}
 }

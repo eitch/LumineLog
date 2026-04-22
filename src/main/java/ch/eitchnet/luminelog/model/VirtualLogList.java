@@ -40,9 +40,8 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 
 	@Override
 	public LogLine get(int index) {
-		if (index < 0 || index >= size()) {
+		if (index < 0 || index >= size())
 			throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size());
-		}
 
 		return cache.computeIfAbsent(index, i -> {
 			try {
@@ -63,9 +62,8 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 		if (newSize > oldSize) {
 			// Remove the previous last entry from cache if it was an empty line due to trailing newline
 			// because now it might have content.
-			if (oldSize > 0) {
+			if (oldSize > 0)
 				cache.remove(oldSize - 1);
-			}
 			beginChange();
 			nextAdd(oldSize, newSize);
 			endChange();
@@ -76,6 +74,9 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 			nextReplace(0, oldSize, java.util.Collections.emptyList());
 			nextAdd(0, newSize);
 			endChange();
+		} else {
+			// Size unchanged, but content may have changed (e.g. truncate + rewrite).
+			cache.clear();
 		}
 	}
 }

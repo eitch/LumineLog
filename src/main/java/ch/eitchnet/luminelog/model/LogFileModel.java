@@ -16,22 +16,55 @@
  */
 package ch.eitchnet.luminelog.model;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Objects;
 
 public class LogFileModel implements AutoCloseable {
+
+	private static final Logger log = LoggerFactory.getLogger(LogFileModel.class);
+
+	private final Path filePath;
 	private RandomAccessFile raf;
+	private Object fileIdentity;
 	private long[] lineOffsets = new long[1024];
 	private int lineCount = 0;
 	private long lastProcessedPosition = 0;
 	private final ByteBuffer indexSearchBuffer = ByteBuffer.allocateDirect(16384);
 
 	public LogFileModel(Path filePath) throws IOException {
+		this.filePath = filePath;
 		this.raf = new RandomAccessFile(filePath.toFile(), "r");
+		this.fileIdentity = readFileIdentity();
+		indexFile();
+	}
+
+	private Object readFileIdentity() throws IOException {
+		BasicFileAttributes attrs = Files.readAttributes(this.filePath, BasicFileAttributes.class);
+		Object fileKey = attrs.fileKey();
+		if (fileKey != null)
+			return fileKey;
+		return attrs.lastModifiedTime().toMillis() + ":" + attrs.size();
+	}
+
+	private void reopenIfReplaced() throws IOException {
+		Object currentIdentity = readFileIdentity();
+		if (Objects.equals(this.fileIdentity, currentIdentity))
+			return;
+
+		log.warn("Reopening file {} due to replacement", this.filePath);
+		this.raf.close();
+		this.raf = new RandomAccessFile(this.filePath.toFile(), "r");
+		this.fileIdentity = currentIdentity;
 		indexFile();
 	}
 
@@ -69,6 +102,8 @@ public class LogFileModel implements AutoCloseable {
 	}
 
 	public synchronized void updateIndex() throws IOException {
+		reopenIfReplaced();
+
 		long fileSize = raf.length();
 		if (fileSize < lastProcessedPosition) {
 			// File truncated

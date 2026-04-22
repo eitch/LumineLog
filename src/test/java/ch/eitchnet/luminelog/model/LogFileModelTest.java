@@ -22,8 +22,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
@@ -142,6 +144,33 @@ public class LogFileModelTest {
 		assertEquals(2, iteratedLines.size());
 		assertEquals("Line 3", iteratedLines.get(0));
 		assertEquals("Line 4", iteratedLines.get(1));
+	}
+
+	@Test
+	public void testUpdateIndexDetectsReplacedFile() throws IOException {
+		Path logFile = tempDir.resolve("replace.log");
+		Files.writeString(logFile, "Old 1\nOld 2\n");
+
+		try (LogFileModel model = new LogFileModel(logFile)) {
+			assertEquals(3, model.getLineCount());
+			assertEquals("Old 1", model.getLine(0));
+			assertEquals("Old 2", model.getLine(1));
+
+			Path replacement = tempDir.resolve("replace-new.log");
+			Files.writeString(replacement, "New 1\nNew 2\n");
+			try {
+				Files.move(replacement, logFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+			} catch (AtomicMoveNotSupportedException _) {
+				Files.move(replacement, logFile, StandardCopyOption.REPLACE_EXISTING);
+			}
+
+			model.updateIndex();
+
+			assertEquals(3, model.getLineCount());
+			assertEquals("New 1", model.getLine(0));
+			assertEquals("New 2", model.getLine(1));
+			assertEquals("", model.getLine(2));
+		}
 	}
 
 	@Test
