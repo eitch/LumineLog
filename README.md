@@ -63,7 +63,7 @@ mvn -Passemble
 
 ## Releasing 
 ```bash
-mvn jreleaser:full-release -Djreleaser.dryRun=true
+mvn jreleaser:full-release -Djreleaser.dry.run=true
 ```
 
 ## License
