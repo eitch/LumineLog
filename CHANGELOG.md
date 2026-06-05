@@ -1,3 +1,33 @@
+## [v0.5.0]
+
+## Changelog
+
+- 0fcc446 [Project] Release version 0.5.0 in pom.xml
+- 412a678 [Project] Add buildAndRelease script for release management
+- 98b0457 [Fix] Prevent unwanted scroll events during list updates
+- 8f9d9cd [Minor] Adjust formatting in LogGenerator for consistency
+- 8062629 [New] Add LogGenerator utility for generating test logs
+- 5f43dbe [Fix] Add option to bypass confirmation in closeTab
+- 1fedb71 [New] Add multi-selection support in log lists
+- 55f543b [Fix] Improve tailCheckBox behavior for edge cases
+- 2362271 [Major] Refactor LogFileModel to simplify resource management
+- cf3b96e [Project] Upgrade JReleaser to 1.24.0 and fix README release command
+- 8f37dfd [Project] Add releasing instructions to README
+- 3423f56 [Project] Update dependency scopes and JReleaser plugin version
+- 28fbd8c [Project] Update JReleaser plugin and adjust artifact paths
+- 424d55e [New] Add file replacement detection in LogFileModel
+- aafebee [Major] Simplify and improve MainController initialization
+- e7d36da [New] Add precision handling for scroll bar updates
+- 1fc5b9c [Fix] Ensure correct tab focus in log viewer
+- f62d80f [New] Add history tracking and menu integration
+- ba65d2d [Project] Update changelog for version 0.4.0
+- bcef865 [Project] Set new version 0.5.0-SNAPSHOT
+
+
+## Contributors
+We'd like to thank the following people for their contributions:
+- Robert von Burg ([@eitch](https://github.com/eitch))
+
 ## [v0.4.0]
 
 ## Changelog
