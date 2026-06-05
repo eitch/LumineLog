@@ -505,12 +505,12 @@ public class MainController {
 		}
 	}
 
-	private void closeTab(Tab tab) {
+	private void closeTab(Tab tab, boolean noConfirm) {
 		TabState state = (TabState) tab.getUserData();
 		if (state == null)
 			return;
 
-		if (DialogUtil.showConfirmation("Close File", "Are you sure you want to close this file?",
+		if (noConfirm || DialogUtil.showConfirmation("Close File", "Are you sure you want to close this file?",
 				state.file.getAbsolutePath())) {
 			state.stopTailing();
 			tabPane.getTabs().remove(tab);
@@ -522,7 +522,7 @@ public class MainController {
 	private void handleTabClose() {
 		Tab selectedTab = tabPane.getSelectionModel().getSelectedItem();
 		if (selectedTab != null)
-			closeTab(selectedTab);
+			closeTab(selectedTab, false);
 	}
 
 	@FXML
@@ -554,7 +554,7 @@ public class MainController {
 			Button closeBtn = new Button("×");
 			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
 			TabState state = new TabState(file, highlightGroup, logModel, logItems, logListView);
-			closeBtn.setOnAction(_ -> closeTab(tab));
+			closeBtn.setOnAction(_ -> closeTab(tab, false));
 			HBox graphic = new HBox(tabLabel, closeBtn);
 			graphic.setAlignment(Pos.CENTER);
 			tab.setGraphic(graphic);
@@ -563,7 +563,7 @@ public class MainController {
 
 			graphic.setOnMouseReleased(event -> {
 				if (event.getButton() == MouseButton.MIDDLE)
-					closeTab(tab);
+					closeTab(tab, true);
 			});
 			tab.setUserData(state);
 			tab.setOnClosed(_ -> {
@@ -694,7 +694,10 @@ public class MainController {
 		copyItem.setOnAction(_ -> {
 			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
 			if (selected != null && !selected.isEmpty()) {
-				String text = selected.stream().map(LogLine::content).collect(Collectors.joining(System.lineSeparator()));
+				String text = selected
+						.stream()
+						.map(LogLine::content)
+						.collect(Collectors.joining(System.lineSeparator()));
 				copyToClipboard(text);
 			}
 		});
@@ -708,7 +711,10 @@ public class MainController {
 				return;
 			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
 			if (selected != null && !selected.isEmpty()) {
-				String text = selected.stream().map(LogLine::content).collect(Collectors.joining(System.lineSeparator()));
+				String text = selected
+						.stream()
+						.map(LogLine::content)
+						.collect(Collectors.joining(System.lineSeparator()));
 				copyToClipboard(text);
 			}
 		});
