@@ -86,6 +86,7 @@ public class MainController {
 	@FXML
 	private Menu historyMenu;
 
+	private boolean ignoreScrollEvents = false;
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
 	private final java.util.Map<TabState, java.util.Map<HighlightRule, Tab>> openOccurrenceTabs
@@ -175,8 +176,14 @@ public class MainController {
 			return;
 
 		int lineCount = state.logItems.size();
-		if (lineCount > 0)
-			state.logListView.scrollTo(lineCount - 1);
+		if (lineCount > 0) {
+			this.ignoreScrollEvents = true;
+			try {
+				state.logListView.scrollTo(lineCount - 1);
+			} finally {
+				this.ignoreScrollEvents = false;
+			}
+		}
 	}
 
 	private void handleActiveTabChanged(Tab oldTab, Tab newTab) {
@@ -579,14 +586,19 @@ public class MainController {
 			startTailing(state);
 
 			Platform.runLater(() -> {
-				logListView.setItems(logItems);
-				if (tailCheckBox.isSelected()) {
-					int lineCount = logItems.size();
-					if (lineCount > 0) {
-						logListView.scrollTo(lineCount - 1);
+				this.ignoreScrollEvents = true;
+				try {
+					logListView.setItems(logItems);
+					if (tailCheckBox.isSelected()) {
+						int lineCount = logItems.size();
+						if (lineCount > 0) {
+							logListView.scrollTo(lineCount - 1);
+						}
 					}
+					setupScrollBarListener(tab, logListView);
+				} finally {
+					this.ignoreScrollEvents = false;
 				}
-				setupScrollBarListener(tab, logListView);
 			});
 		} catch (IOException e) {
 			DialogUtil.showError("Could not open file: " + e.getMessage());
@@ -607,7 +619,7 @@ public class MainController {
 	}
 
 	private void handleScrollBarChanged(Tab tab, ScrollBar scrollBar, Number oldVal, Number newVal) {
-		if (tabPane.getSelectionModel().getSelectedItem() != tab)
+		if (this.ignoreScrollEvents || tabPane.getSelectionModel().getSelectedItem() != tab)
 			return;
 
 		double value = newVal.doubleValue();
@@ -617,11 +629,11 @@ public class MainController {
 
 		double max = scrollBar.getMax();
 		if (precision < oldVal.doubleValue()) {
-			if (tailCheckBox.isSelected() && precision < max - 0.0001) {
+			if (tailCheckBox.isSelected() && max > 0.0 && precision < max - 0.0001) {
 				tailCheckBox.setSelected(false);
 			}
 		} else {
-			if (precision >= max - 0.0001) {
+			if (max > 0.0 && precision >= max - 0.0001) {
 				if (!tailCheckBox.isSelected()) {
 					tailCheckBox.setSelected(true);
 				}
@@ -742,12 +754,17 @@ public class MainController {
 
 	private void refreshLogView(TabState state) {
 		if (state != null && state.logItems != null) {
-			int lineCount = state.logModel.getLineCount();
-			state.logItems.fireSizeChanged(0, lineCount);
-			if (lineCount > 0) {
-				state.logListView.scrollTo(lineCount - 1);
+			this.ignoreScrollEvents = true;
+			try {
+				int lineCount = state.logModel.getLineCount();
+				state.logItems.fireSizeChanged(0, lineCount);
+				if (lineCount > 0) {
+					state.logListView.scrollTo(lineCount - 1);
+				}
+				state.logListView.refresh();
+			} finally {
+				this.ignoreScrollEvents = false;
 			}
-			state.logListView.refresh();
 		}
 	}
 
@@ -763,11 +780,16 @@ public class MainController {
 						int newCount = state.logModel.getLineCount();
 						if (newCount != oldCount) {
 							Platform.runLater(() -> {
-								state.logItems.fireSizeChanged(oldCount, newCount);
-								updateHighlightsBar();
+								MainController.this.ignoreScrollEvents = true;
+								try {
+									state.logItems.fireSizeChanged(oldCount, newCount);
+									updateHighlightsBar();
 
-								if (tailCheckBox.isSelected() && newCount > 0) {
-									state.logListView.scrollTo(newCount - 1);
+									if (tailCheckBox.isSelected() && newCount > 0) {
+										state.logListView.scrollTo(newCount - 1);
+									}
+								} finally {
+									MainController.this.ignoreScrollEvents = false;
 								}
 							});
 						}
