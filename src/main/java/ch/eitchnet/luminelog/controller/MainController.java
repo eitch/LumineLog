@@ -617,7 +617,7 @@ public class MainController {
 
 		double max = scrollBar.getMax();
 		if (precision < oldVal.doubleValue()) {
-			if (tailCheckBox.isSelected()) {
+			if (tailCheckBox.isSelected() && precision < max - 0.0001) {
 				tailCheckBox.setSelected(false);
 			}
 		} else {
@@ -716,7 +716,7 @@ public class MainController {
 								state.logItems.fireSizeChanged(oldCount, newCount);
 								updateHighlightsBar();
 
-								if (tailCheckBox.isSelected() && newCount > oldCount) {
+								if (tailCheckBox.isSelected() && newCount > 0) {
 									state.logListView.scrollTo(newCount - 1);
 								}
 							});
