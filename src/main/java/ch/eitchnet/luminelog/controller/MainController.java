@@ -650,13 +650,53 @@ public class MainController {
 		clipboard.setContent(content);
 	}
 
+	private void setupDragSelection(ListView<LogLine> listView) {
+		listView.setOnMousePressed(event -> {
+			if (event.getButton() == MouseButton.PRIMARY) {
+				Node node = event.getPickResult().getIntersectedNode();
+				while (node != null && !(node instanceof ListCell)) {
+					node = node.getParent();
+				}
+				if (node instanceof ListCell<?> cell && cell.getItem() != null) {
+					listView.getProperties().put("dragAnchorIndex", cell.getIndex());
+				} else {
+					listView.getProperties().remove("dragAnchorIndex");
+				}
+			}
+		});
+
+		listView.setOnMouseDragged(event -> {
+			if (event.getButton() == MouseButton.PRIMARY) {
+				Node node = event.getPickResult().getIntersectedNode();
+				while (node != null && !(node instanceof ListCell)) {
+					node = node.getParent();
+				}
+
+				if (node instanceof ListCell<?> cell && cell.getItem() != null) {
+					Integer anchor = (Integer) listView.getProperties().get("dragAnchorIndex");
+					if (anchor != null) {
+						int index = cell.getIndex();
+						listView.getSelectionModel().clearSelection();
+						if (anchor <= index) {
+							listView.getSelectionModel().selectRange(anchor, index + 1);
+						} else {
+							listView.getSelectionModel().selectRange(index, anchor + 1);
+						}
+					}
+				}
+			}
+		});
+	}
+
 	private void setupCopyContextMenu(ListView<LogLine> listView) {
 		ContextMenu contextMenu = new ContextMenu();
-		MenuItem copyItem = new MenuItem("Copy Line");
+		MenuItem copyItem = new MenuItem("Copy Selected Lines");
 		copyItem.setOnAction(_ -> {
-			LogLine selected = listView.getSelectionModel().getSelectedItem();
-			if (selected != null)
-				copyToClipboard(selected.content());
+			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
+			if (selected != null && !selected.isEmpty()) {
+				String text = selected.stream().map(LogLine::content).collect(Collectors.joining(System.lineSeparator()));
+				copyToClipboard(text);
+			}
 		});
 		contextMenu.getItems().add(copyItem);
 
@@ -666,15 +706,19 @@ public class MainController {
 		listView.setOnKeyPressed(e -> {
 			if (!e.isControlDown() || e.getCode() != KeyCode.C)
 				return;
-			LogLine selected = listView.getSelectionModel().getSelectedItem();
-			if (selected != null)
-				copyToClipboard(selected.content());
+			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
+			if (selected != null && !selected.isEmpty()) {
+				String text = selected.stream().map(LogLine::content).collect(Collectors.joining(System.lineSeparator()));
+				copyToClipboard(text);
+			}
 		});
 	}
 
 	private ListView<LogLine> createLogListView() {
 		ListView<LogLine> logListView = new ListView<>();
+		logListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
 		logListView.setCellFactory(getHighlightingCellCallback());
+		setupDragSelection(logListView);
 		setupCopyContextMenu(logListView);
 		return logListView;
 	}
@@ -977,7 +1021,9 @@ public class MainController {
 						occurrences);
 
 				ListView<LogLine> listView = new ListView<>(observableOccurrences);
+				listView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
 				listView.setCellFactory(getHighlightingCellCallback(rule));
+				setupDragSelection(listView);
 				setupCopyContextMenu(listView);
 				listView.setOnMouseClicked(event -> {
 					if (event.getClickCount() == 2) {
