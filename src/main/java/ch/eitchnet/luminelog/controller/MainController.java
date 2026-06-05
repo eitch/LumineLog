@@ -115,13 +115,6 @@ public class MainController {
 				tailTimer.cancel();
 				tailTimer = null;
 			}
-			if (logModel != null) {
-				try {
-					logModel.close();
-				} catch (IOException e) {
-					// ignore
-				}
-			}
 		}
 	}
 
