@@ -20,6 +20,7 @@ import javafx.collections.ObservableListBase;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class VirtualLogList extends ObservableListBase<LogLine> {
@@ -27,6 +28,8 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 	private final LogFileModel logModel;
 	private final Map<Integer, LogLine> cache;
 	private static final int CACHE_SIZE = 1000;
+
+	private LogFileModel.Batch currentBatch;
 
 	public VirtualLogList(LogFileModel logModel) {
 		this.logModel = logModel;
@@ -43,14 +46,25 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 		if (index < 0 || index >= size())
 			throw new IndexOutOfBoundsException("Index: " + index + ", Size: " + size());
 
-		return cache.computeIfAbsent(index, i -> {
+		LogLine cached = cache.get(index);
+		if (cached != null)
+			return cached;
+
+		if (currentBatch == null || index < currentBatch.startLine() || index >= currentBatch.endLine()) {
 			try {
-				String content = logModel.getLine(i);
-				return new LogLine(i + 1, content != null ? content : "");
+				currentBatch = logModel.readBatch(index);
 			} catch (IOException e) {
-				return new LogLine(i + 1, "ERROR READING LINE " + i + ": " + e.getMessage());
+				return new LogLine(index + 1, "ERROR READING BATCH AT " + index + ": " + e.getMessage());
 			}
-		});
+		}
+
+		List<String> lines = currentBatch.getLines(logModel);
+		for (int i = 0; i < lines.size(); i++) {
+			int lineIndex = currentBatch.startLine() + i;
+			cache.putIfAbsent(lineIndex, new LogLine(lineIndex + 1, lines.get(i)));
+		}
+
+		return cache.get(index);
 	}
 
 	@Override
@@ -59,6 +73,7 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 	}
 
 	public void fireSizeChanged(int oldSize, int newSize) {
+		currentBatch = null;
 		if (newSize > oldSize) {
 			// Remove the previous last entry from cache if it was an empty line due to trailing newline
 			// because now it might have content.

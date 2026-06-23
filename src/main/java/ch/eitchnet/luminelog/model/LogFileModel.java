@@ -27,6 +27,8 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 
 public class LogFileModel {
@@ -99,6 +101,18 @@ public class LogFileModel {
 		}
 	}
 
+	public Path getFilePath() {
+		return this.filePath;
+	}
+
+	public long getFileSize() throws IOException {
+		return Files.size(this.filePath);
+	}
+
+	public long getLastModified() throws IOException {
+		return Files.getLastModifiedTime(this.filePath).toMillis();
+	}
+
 	public synchronized void updateIndex() throws IOException {
 		reopenIfReplaced();
 
@@ -140,84 +154,80 @@ public class LogFileModel {
 	public synchronized String getLine(int index) throws IOException {
 		if (index < 0 || index >= lineCount)
 			return null;
-		long start = lineOffsets[index];
-		long end = (index + 1 < lineCount) ? lineOffsets[index + 1] : -1;
-
-		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
-			return getLine(raf, start, end);
-		}
-	}
-
-	private String getLine(RandomAccessFile raf, long start, long end) throws IOException {
-		if (end == -1)
-			end = raf.length();
-
-		long length = end - start;
-		if (length <= 0)
-			return "";
-
-		byte[] bytes = new byte[(int) length];
-		raf.seek(start);
-		raf.readFully(bytes);
-		String line = new String(bytes);
-		if (line.endsWith("\n")) {
-			line = line.substring(0, line.length() - 1);
-		}
-		if (line.endsWith("\r")) {
-			line = line.substring(0, line.length() - 1);
-		}
-		return line;
+		Batch batch = readBatch(index);
+		return batch.getLines(this).get(0);
 	}
 
 	public synchronized void iterateLines(int startLine, LineProcessor processor) throws IOException {
-		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
-			long fileSize = raf.length();
-			if (fileSize == 0 || startLine >= lineCount)
-				return;
+		int currentLine = startLine;
+		while (currentLine < lineCount) {
+			Batch batch = readBatch(currentLine);
+			List<String> lines = batch.getLines(this);
+			if (lines.isEmpty())
+				break;
 
-			FileChannel channel = raf.getChannel();
-			ByteBuffer buffer = ByteBuffer.allocateDirect(128 * 1024);
-			long bufferStartPos = -1;
+			for (String line : lines) {
+				if (!processor.process(line, currentLine++))
+					return;
+			}
+		}
+	}
 
-			for (int i = startLine; i < lineCount; i++) {
-				long start = lineOffsets[i];
-				long end = (i + 1 < lineCount) ? lineOffsets[i + 1] : fileSize;
-				long length = end - start;
-
-				if (length <= 0) {
-					if (!processor.process("", i))
-						break;
-					continue;
+	public record Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead) {
+		public List<String> getLines(LogFileModel model) {
+			List<String> lines = new ArrayList<>();
+			if (totalBytesToRead > 0) {
+				for (int i = startLine; i < endLine; i++) {
+					long relativeStart = model.lineOffsets[i] - startOffset;
+					long relativeEnd = (i + 1 < model.lineCount) ? model.lineOffsets[i + 1] - startOffset : totalBytesToRead;
+					int length = (int) (relativeEnd - relativeStart);
+					if (length <= 0) {
+						lines.add("");
+					} else {
+						lines.add(model.sanitizeLine(new String(bytes, (int) relativeStart, length)));
+					}
 				}
-
-				if (length > buffer.capacity()) {
-					byte[] bytes = new byte[(int) length];
-					channel.read(ByteBuffer.wrap(bytes), start);
-					String line = sanitizeLine(new String(bytes));
-					if (!processor.process(line, i))
-						break;
-					continue;
-				}
-
-				// Refill if not in buffer or not enough remaining
-				if (bufferStartPos == -1 || start < bufferStartPos || start + length > bufferStartPos + buffer.limit()) {
-					buffer.clear();
-					int read = channel.read(buffer, start);
-					if (read <= 0)
-						break;
-					buffer.flip();
-					bufferStartPos = start;
-				}
-
-				buffer.position((int) (start - bufferStartPos));
-				byte[] bytes = new byte[(int) length];
-				buffer.get(bytes);
-
-				String line = sanitizeLine(new String(bytes));
-				if (!processor.process(line, i)) {
-					break;
+			} else {
+				for (int i = startLine; i < endLine; i++) {
+					lines.add("");
 				}
 			}
+			return lines;
+		}
+	}
+
+	public Batch readBatch(int startLine) throws IOException {
+		int batchSize = 1000;
+		long maxBatchBytes = 1024 * 1024; // 1MB
+
+		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
+			long fileSize = raf.length();
+			long startOffset = lineOffsets[startLine];
+			int currentEndLine = startLine;
+			long batchBytes = 0;
+
+			while (currentEndLine < lineCount && (currentEndLine - startLine) < batchSize && batchBytes < maxBatchBytes) {
+				long lineStart = lineOffsets[currentEndLine];
+				long lineEnd = (currentEndLine + 1 < lineCount) ? lineOffsets[currentEndLine + 1] : fileSize;
+				long lineLength = lineEnd - lineStart;
+				if (batchBytes + lineLength > maxBatchBytes && currentEndLine > startLine) {
+					break;
+				}
+				batchBytes += lineLength;
+				currentEndLine++;
+			}
+
+			long endOffset = (currentEndLine < lineCount) ? lineOffsets[currentEndLine] : fileSize;
+			long totalBytesToRead = endOffset - startOffset;
+
+			byte[] bytes = new byte[0];
+			if (totalBytesToRead > 0) {
+				bytes = new byte[(int) totalBytesToRead];
+				raf.seek(startOffset);
+				raf.readFully(bytes);
+			}
+
+			return new Batch(bytes, startLine, currentEndLine, startOffset, totalBytesToRead);
 		}
 	}
 
