@@ -50,6 +50,10 @@ import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -194,7 +198,7 @@ public class MainController {
 			this.statusLabel.setText("No file opened");
 		} else {
 			TabState state = (TabState) newTab.getUserData();
-			this.statusLabel.setText("File: " + state.file.getAbsolutePath());
+			updateFooterStatus(state);
 
 			if (state.highlightGroup != null && !state.highlightGroup.equals(this.currentGroup)) {
 				this.currentGroup = state.highlightGroup;
@@ -596,6 +600,7 @@ public class MainController {
 						}
 					}
 					setupScrollBarListener(tab, logListView);
+					updateFooterStatus(state);
 				} finally {
 					this.ignoreScrollEvents = false;
 				}
@@ -782,10 +787,11 @@ public class MainController {
 							Platform.runLater(() -> {
 								MainController.this.ignoreScrollEvents = true;
 								try {
-									state.logItems.fireSizeChanged(oldCount, newCount);
-									updateHighlightsBar();
-
-									if (tailCheckBox.isSelected() && newCount > 0) {
+ 								state.logItems.fireSizeChanged(oldCount, newCount);
+ 								updateHighlightsBar();
+ 								updateFooterStatus(state);
+								
+ 								if (tailCheckBox.isSelected() && newCount > 0) {
 										state.logListView.scrollTo(newCount - 1);
 									}
 								} finally {
@@ -1299,6 +1305,39 @@ public class MainController {
 			logger.error("Failed to show about dialog", e);
 			DialogUtil.showError("Failed to show about dialog", e);
 		}
+	}
+
+	private void updateFooterStatus(TabState state) {
+		if (state == null || state.logModel == null) {
+			this.statusLabel.setText("No file opened");
+			return;
+		}
+		try {
+			long size = state.logModel.getFileSize();
+			long modified = state.logModel.getLastModified();
+			String sizeStr = humanReadableSize(size);
+			String dateStr = formatTimestamp(modified);
+			this.statusLabel.setText("File: " + state.file.getAbsolutePath() + " | Size: " + sizeStr + " | Modified: " + dateStr);
+		} catch (IOException e) {
+			this.statusLabel.setText("File: " + state.file.getAbsolutePath());
+		}
+	}
+
+	private static String humanReadableSize(long bytes) {
+		final String[] units = {"B", "KB", "MB", "GB", "TB"};
+		double b = bytes;
+		int unitIndex = 0;
+		while (b >= 1024 && unitIndex < units.length - 1) {
+			b /= 1024.0;
+			unitIndex++;
+		}
+		return String.format(unitIndex == 0 ? "%.0f %s" : "%.1f %s", b, units[unitIndex]);
+	}
+
+	private static String formatTimestamp(long millis) {
+		LocalDateTime dt = LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault());
+		DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+		return dt.format(fmt);
 	}
 
 	@FXML
