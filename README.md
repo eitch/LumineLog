@@ -56,7 +56,7 @@ mvn javafx:run
 
 ```bash
 # Clean:
-mvn clean
+mvn clean package
 # Provision JDKS:
 mvn -Pjdks
 # Copy JARs:

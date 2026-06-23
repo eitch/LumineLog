@@ -123,166 +123,37 @@
         <pluginManagement>
             <plugins>
                 <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>buildnumber-maven-plugin</artifactId>
+                    <version>3.3.0</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>exec-maven-plugin</artifactId>
+                    <version>3.6.3</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.15.0</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.5.0</version>
+                </plugin>
+
+                <plugin>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-maven-plugin</artifactId>
+                    <version>0.0.8</version>
+                </plugin>
+                <plugin>
                     <groupId>org.jreleaser</groupId>
                     <artifactId>jreleaser-maven-plugin</artifactId>
                     <version>1.24.0</version>
-                    <configuration>
-                        <jreleaser>
-                            <project>
-                                <name>${project.name}</name>
-                                <authors>
-                                    <author>eitch</author>
-                                </authors>
-                                <maintainers>
-                                    <maintainer>eitch</maintainer>
-                                </maintainers>
-                            </project>
-
-                            <!--                            <environment>-->
-                            <!--                                <variables>path/to/alternate/config.properties</variables>-->
-                            <!--                            </environment>-->
-
-                            <release>
-                                <github>
-                                    <overwrite>true</overwrite>
-                                    <!--                                    <sign>true</sign>-->
-                                    <discussionCategoryName>Announcements</discussionCategoryName>
-                                    <issues>
-                                        <enabled>true</enabled>
-                                    </issues>
-                                    <!--                                    <previousTagName>v0.2.0</previousTagName>-->
-                                    <changelog>
-                                        <formatted>ALWAYS</formatted>
-                                        <contentTemplate>src/jreleaser/changelog.tpl</contentTemplate>
-                                        <!--                                        <preset>gitmoji</preset>-->
-                                        <preset>conventional-commits</preset>
-                                        <contributors>
-                                            <format>- {{contributorName}}{{#contributorUsernameAsLink}} ({{.}}){{/contributorUsernameAsLink}}</format>
-                                        </contributors>
-                                        <extraProperties>
-                                            <categorizeScopes>true</categorizeScopes>
-                                        </extraProperties>
-                                        <hide>
-                                            <contributors>
-                                                GitHub
-                                            </contributors>
-                                        </hide>
-                                        <append>
-                                            <enabled>true</enabled>
-                                        </append>
-                                    </changelog>
-                                </github>
-                            </release>
-
-                            <catalog>
-                                <sbom>
-                                    <syft>
-                                        <active>ALWAYS</active>
-                                        <pack>
-                                            <enabled>true</enabled>
-                                        </pack>
-                                    </syft>
-                                </sbom>
-                                <swid>
-                                    <swid-tag>
-                                        <active>ALWAYS</active>
-                                    </swid-tag>
-                                </swid>
-                            </catalog>
-
-                            <announce>
-                                <mastodon>
-                                    <active>RELEASE</active>
-                                    <host>https://mstdn.gsi.li</host>
-                                    <statusTemplate>src/jreleaser/mastodon.tpl</statusTemplate>
-                                </mastodon>
-                            </announce>
-
-                            <!--                            <signing>-->
-                            <!--                                <active>ALWAYS</active>-->
-                            <!--                                <armored>true</armored>-->
-                            <!--                                <pgp>-->
-                            <!--                                    <active>ALWAYS</active>-->
-                            <!--                                    <command>-->
-                            <!--                                        <executable>gpg</executable>-->
-                            <!--                                        <keyName>${gpg.keyname}</keyName>-->
-                            <!--                                    </command>-->
-                            <!--                                </pgp>-->
-                            <!--                            </signing>-->
-
-                            <assemble>
-                                <jlink>
-                                    <LumineLog>
-                                        <active>ALWAYS</active>
-                                        <java>
-                                            <mainClass>${app.main.class}</mainClass>
-                                            <mainModule>${app.main.module}</mainModule>
-                                            <jvmOptions>
-                                                <universal>
-                                                    --enable-native-access=javafx.graphics
-                                                </universal>
-                                            </jvmOptions>
-                                        </java>
-                                        <imageName>${jarFinalName}-${project.version}</imageName>
-                                        <executable>${jarFinalName}</executable>
-                                        <mainJar>
-                                            <path>target/{{distributionName}}-{{projectVersion}}.jar</path>
-                                        </mainJar>
-                                        <swid>
-                                            <tagRef>swid-tag</tagRef>
-                                        </swid>
-                                        <jars>
-                                            <jar>
-                                                <pattern>${project.build.directory}/repositories/universal/*.jar
-                                                </pattern>
-                                            </jar>
-                                            <jar>
-                                                <pattern>${project.build.directory}/repositories/osx-x86_64/*.jar</pattern>
-                                                <platform>osx-x86_64</platform>
-                                            </jar>
-                                            <jar>
-                                                <pattern>${project.build.directory}/repositories/osx-aarch_64/*.jar</pattern>
-                                                <platform>osx-aarch_64</platform>
-                                            </jar>
-                                            <jar>
-                                                <pattern>${project.build.directory}/repositories/windows-x86_64/*.jar</pattern>
-                                                <platform>windows-x86_64</platform>
-                                            </jar>
-                                            <jar>
-                                                <pattern>${project.build.directory}/repositories/linux-x86_64/*.jar</pattern>
-                                                <platform>linux-x86_64</platform>
-                                            </jar>
-                                        </jars>
-                                        <additionalModuleNames>
-                                            org.slf4j,ch.qos.logback.classic,ch.qos.logback.core,javafx.base,javafx.graphics,javafx.controls,java.naming
-                                        </additionalModuleNames>
-                                        <jdeps>
-                                            <multiRelease>${java.version}</multiRelease>
-                                            <ignoreMissingDeps>true</ignoreMissingDeps>
-                                        </jdeps>
-                                        <targetJdks>
-                                            <targetJdk>
-                                                <path>target/jdks/jdk-linux/${zulu.linux.name}</path>
-                                                <platform>linux-x86_64</platform>
-                                            </targetJdk>
-                                            <targetJdk>
-                                                <path>target/jdks/jdk-windows/${zulu.windows.name}</path>
-                                                <platform>windows-x86_64</platform>
-                                            </targetJdk>
-                                            <targetJdk>
-                                                <path>target/jdks/jdk-macosx/${zulu.macosx.name}/zulu-25.jdk/Contents/Home</path>
-                                                <platform>osx-x86_64</platform>
-                                            </targetJdk>
-                                            <targetJdk>
-                                                <path>target/jdks/jdk-macosx-arm/${zulu.macosx.arm.name}/zulu-25.jdk/Contents/Home</path>
-                                                <platform>osx-aarch_64</platform>
-                                            </targetJdk>
-                                        </targetJdks>
-                                    </LumineLog>
-                                </jlink>
-                            </assemble>
-                        </jreleaser>
-                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>
@@ -308,7 +179,6 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>buildnumber-maven-plugin</artifactId>
-                <version>3.3.0</version>
                 <executions>
                     <execution>
                         <phase>validate</phase>
@@ -326,7 +196,6 @@
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
-                <version>3.6.3</version>
                 <configuration>
                     <mainClass>${app.main.class}</mainClass>
                 </configuration>
@@ -334,13 +203,11 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.15.0</version>
             </plugin>
 
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.5.0</version>
                 <configuration>
                     <archive>
                         <manifest>
@@ -369,6 +236,168 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.jreleaser</groupId>
+                <artifactId>jreleaser-maven-plugin</artifactId>
+                <configuration>
+                    <jreleaser>
+                        <project>
+                            <name>${project.name}</name>
+                            <authors>
+                                <author>eitch</author>
+                            </authors>
+                            <maintainers>
+                                <maintainer>eitch</maintainer>
+                            </maintainers>
+                        </project>
+
+                        <!--                            <environment>-->
+                        <!--                                <variables>path/to/alternate/config.properties</variables>-->
+                        <!--                            </environment>-->
+
+                        <release>
+                            <github>
+                                <overwrite>true</overwrite>
+                                <!--                                    <sign>true</sign>-->
+                                <discussionCategoryName>Announcements</discussionCategoryName>
+                                <issues>
+                                    <enabled>true</enabled>
+                                </issues>
+                                <!--                                    <previousTagName>v0.2.0</previousTagName>-->
+                                <changelog>
+                                    <formatted>ALWAYS</formatted>
+                                    <contentTemplate>src/jreleaser/changelog.tpl</contentTemplate>
+                                    <!--                                        <preset>gitmoji</preset>-->
+                                    <preset>conventional-commits</preset>
+                                    <contributors>
+                                        <format>- {{contributorName}}{{#contributorUsernameAsLink}} ({{.}}){{/contributorUsernameAsLink}}</format>
+                                    </contributors>
+                                    <extraProperties>
+                                        <categorizeScopes>true</categorizeScopes>
+                                    </extraProperties>
+                                    <hide>
+                                        <contributors>
+                                            GitHub
+                                        </contributors>
+                                    </hide>
+                                    <append>
+                                        <enabled>true</enabled>
+                                    </append>
+                                </changelog>
+                            </github>
+                        </release>
+
+                        <catalog>
+                            <sbom>
+                                <syft>
+                                    <active>ALWAYS</active>
+                                    <pack>
+                                        <enabled>true</enabled>
+                                    </pack>
+                                </syft>
+                            </sbom>
+                            <swid>
+                                <swid-tag>
+                                    <active>ALWAYS</active>
+                                </swid-tag>
+                            </swid>
+                        </catalog>
+
+                        <announce>
+                            <mastodon>
+                                <active>RELEASE</active>
+                                <host>https://mstdn.gsi.li</host>
+                                <statusTemplate>src/jreleaser/mastodon.tpl</statusTemplate>
+                            </mastodon>
+                        </announce>
+
+                        <!--                            <signing>-->
+                        <!--                                <active>ALWAYS</active>-->
+                        <!--                                <armored>true</armored>-->
+                        <!--                                <pgp>-->
+                        <!--                                    <active>ALWAYS</active>-->
+                        <!--                                    <command>-->
+                        <!--                                        <executable>gpg</executable>-->
+                        <!--                                        <keyName>${gpg.keyname}</keyName>-->
+                        <!--                                    </command>-->
+                        <!--                                </pgp>-->
+                        <!--                            </signing>-->
+
+                        <assemble>
+                            <jlink>
+                                <LumineLog>
+                                    <active>ALWAYS</active>
+                                    <java>
+                                        <mainClass>${app.main.class}</mainClass>
+                                        <mainModule>${app.main.module}</mainModule>
+                                        <jvmOptions>
+                                            <universal>
+                                                --enable-native-access=javafx.graphics
+                                            </universal>
+                                        </jvmOptions>
+                                    </java>
+                                    <imageName>${jarFinalName}-${project.version}</imageName>
+                                    <executable>${jarFinalName}</executable>
+                                    <mainJar>
+                                        <path>target/{{distributionName}}-{{projectVersion}}.jar</path>
+                                    </mainJar>
+                                    <swid>
+                                        <tagRef>swid-tag</tagRef>
+                                    </swid>
+                                    <jars>
+                                        <jar>
+                                            <pattern>${project.build.directory}/repositories/universal/*.jar
+                                            </pattern>
+                                        </jar>
+                                        <jar>
+                                            <pattern>${project.build.directory}/repositories/osx-x86_64/*.jar</pattern>
+                                            <platform>osx-x86_64</platform>
+                                        </jar>
+                                        <jar>
+                                            <pattern>${project.build.directory}/repositories/osx-aarch_64/*.jar</pattern>
+                                            <platform>osx-aarch_64</platform>
+                                        </jar>
+                                        <jar>
+                                            <pattern>${project.build.directory}/repositories/windows-x86_64/*.jar</pattern>
+                                            <platform>windows-x86_64</platform>
+                                        </jar>
+                                        <jar>
+                                            <pattern>${project.build.directory}/repositories/linux-x86_64/*.jar</pattern>
+                                            <platform>linux-x86_64</platform>
+                                        </jar>
+                                    </jars>
+                                    <additionalModuleNames>
+                                        org.slf4j,ch.qos.logback.classic,ch.qos.logback.core,javafx.base,javafx.graphics,javafx.controls,java.naming
+                                    </additionalModuleNames>
+                                    <jdeps>
+                                        <multiRelease>${java.version}</multiRelease>
+                                        <ignoreMissingDeps>true</ignoreMissingDeps>
+                                    </jdeps>
+                                    <targetJdks>
+                                        <targetJdk>
+                                            <path>target/jdks/jdk-linux/${zulu.linux.name}</path>
+                                            <platform>linux-x86_64</platform>
+                                        </targetJdk>
+                                        <targetJdk>
+                                            <path>target/jdks/jdk-windows/${zulu.windows.name}</path>
+                                            <platform>windows-x86_64</platform>
+                                        </targetJdk>
+                                        <targetJdk>
+                                            <path>target/jdks/jdk-macosx/${zulu.macosx.name}/zulu-25.jdk/Contents/Home</path>
+                                            <platform>osx-x86_64</platform>
+                                        </targetJdk>
+                                        <targetJdk>
+                                            <path>target/jdks/jdk-macosx-arm/${zulu.macosx.arm.name}/zulu-25.jdk/Contents/Home</path>
+                                            <platform>osx-aarch_64</platform>
+                                        </targetJdk>
+                                    </targetJdks>
+                                </LumineLog>
+                            </jlink>
+                        </assemble>
+                    </jreleaser>
+                </configuration>
             </plugin>
 
         </plugins>

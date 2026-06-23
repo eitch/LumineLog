@@ -34,7 +34,7 @@ else
 fi
 
 # Clean:
-mvn clean
+mvn clean package
 # Provision JDKS:
 mvn -Pjdks
 # Copy JARs:
