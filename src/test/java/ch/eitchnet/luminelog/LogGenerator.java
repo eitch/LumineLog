@@ -30,7 +30,7 @@ public class LogGenerator {
 			"Connection established to remote server."};
 
 	private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
-	private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+	private static final long MAX_FILE_SIZE = 20 * 1024 * 1024; // 10MB
 	private static final Path LOG_FILE = Paths.get("target", "generated-test.log");
 
 	private final Random random = new Random();
@@ -49,8 +49,8 @@ public class LogGenerator {
 		do {
 			checkSizeAndTruncate();
 
-			boolean burst = random.nextInt(100) > 80;
-			int count = burst ? 500 + random.nextInt(1000) : 1 + random.nextInt(5);
+			boolean burst = random.nextInt(100) > 90;
+			int count = burst ? 1000 + random.nextInt(1000) : 1 + random.nextInt(5);
 			if (burst)
 				System.out.println("Bursting with " + count + " entries");
 
