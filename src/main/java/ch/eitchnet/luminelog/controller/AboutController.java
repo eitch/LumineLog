@@ -26,6 +26,7 @@ import javafx.scene.image.ImageView;
 import javafx.stage.Stage;
 
 import java.io.InputStream;
+import java.util.Properties;
 
 public class AboutController {
 
@@ -50,7 +51,19 @@ public class AboutController {
 
 		// In a real app, version would be loaded from a properties file or manifest
 		String version = getClass().getPackage().getImplementationVersion();
-		if (version == null)
+		if (version == null || version.isEmpty()) {
+			try (InputStream resourceAsStream = getClass().getResourceAsStream("/appVersion.properties")) {
+				if (resourceAsStream != null) {
+					Properties properties = new Properties();
+					properties.load(resourceAsStream);
+					version = properties.getProperty("artifactVersion");
+				}
+			} catch (Exception e) {
+				// ignore
+			}
+		}
+
+		if (version == null || version.isEmpty())
 			version = "Development";
 		versionLabel.setText("Version " + version);
 	}
