@@ -1,3 +1,22 @@
+## [v0.6.0]
+
+## Changelog
+
+- ae01703 [Project] Set new version 0.6.0
+- 30f2314 [Fix] Load version from properties file if manifest metadata is missing
+- d59f474 [New] Add Maven plugin configurations and build scripts
+- d38af37 [Minor] Adjust LogGenerator burst logic and file size limit
+- 5985028 [New] Display file size and last modified date in footer
+- eb02e60 [Major] Refactor log file handling for batch processing
+- 5a5ea3b [Docs] Update README.md to reflect new features and enhancements
+- 0049b16 [Project] Bump version to 0.6.0-SNAPSHOT in pom.xml
+- e4f28da [Project] Update changelog for version 0.5.0
+
+
+## Contributors
+We'd like to thank the following people for their contributions:
+- Robert von Burg
+
 ## [v0.5.0]
 
 ## Changelog
