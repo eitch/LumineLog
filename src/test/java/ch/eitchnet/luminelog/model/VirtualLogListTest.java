@@ -33,6 +33,44 @@ public class VirtualLogListTest {
 	Path tempDir;
 
 	@Test
+	public void backgroundIndexMustNotChangePublishedSize() throws IOException {
+		Path file = tempDir.resolve("publication.log");
+		Files.writeString(file, "first");
+		LogFileModel model = new LogFileModel(file);
+		VirtualLogList list = new VirtualLogList(model);
+		Files.writeString(file, "\nsecond", java.nio.file.StandardOpenOption.APPEND);
+		model.updateIndex();
+		assertEquals(1, list.size());
+		assertEquals("first", list.get(0).content());
+		list.fireSizeChanged(1, 2);
+		assertEquals(2, list.size());
+	}
+
+	@Test
+	public void appendNotifiesChangedFinalLineAndAddedRows() throws IOException {
+		Path file = tempDir.resolve("notifications.log");
+		Files.writeString(file, "first");
+		LogFileModel model = new LogFileModel(file);
+		VirtualLogList list = new VirtualLogList(model);
+		AtomicBoolean updated = new AtomicBoolean();
+		AtomicBoolean added = new AtomicBoolean();
+		list.addListener((javafx.collections.ListChangeListener<LogLine>) change -> {
+			while (change.next()) {
+				if (change.wasUpdated() && change.getFrom() == 0)
+					updated.set(true);
+				if (change.wasAdded() && change.getFrom() == 1 && change.getTo() == 2)
+					added.set(true);
+			}
+		});
+		Files.writeString(file, " completed\nsecond", java.nio.file.StandardOpenOption.APPEND);
+		model.updateIndex();
+		list.fireSizeChanged(1, 2);
+		assertTrue(updated.get());
+		assertTrue(added.get());
+		assertEquals("first completed", list.get(0).content());
+	}
+
+	@Test
 	public void testVirtualList() throws IOException {
 		Path logFile = tempDir.resolve("test.log");
 		Files.writeString(logFile, "Line 1\nLine 2\nLine 3\n");
@@ -62,6 +100,79 @@ public class VirtualLogListTest {
 		assertEquals(5, list.size());
 		assertEquals("Line 4", list.get(3).content());
 		assertEquals("", list.get(4).content());
+	}
+
+	@Test
+	public void sameCountAppendNotifiesAndRefreshesFinalLine() throws IOException {
+		Path file = tempDir.resolve("partial.log");
+		Files.writeString(file, "prefix");
+		LogFileModel model = new LogFileModel(file);
+		VirtualLogList list = new VirtualLogList(model);
+		assertEquals("prefix", list.get(0).content());
+		AtomicBoolean updated = new AtomicBoolean();
+		list.addListener((javafx.collections.ListChangeListener<LogLine>) change -> {
+			while (change.next())
+				updated.set(updated.get() || change.wasUpdated());
+		});
+		Files.writeString(file, " suffix", java.nio.file.StandardOpenOption.APPEND);
+		model.updateIndex();
+		list.publish(model.snapshot());
+		assertTrue(updated.get());
+		assertEquals("prefix suffix", list.get(0).content());
+	}
+
+	@Test
+	public void coalescedUpdatesAreRelativeToPublishedStateAndIgnoreStaleVersions() throws IOException {
+		Path file = tempDir.resolve("coalesced.log");
+		Files.writeString(file, "one");
+		LogFileModel model = new LogFileModel(file);
+		VirtualLogList list = new VirtualLogList(model);
+		Files.writeString(file, "\ntwo", java.nio.file.StandardOpenOption.APPEND);
+		model.updateIndex();
+		var intermediate = model.snapshot();
+		Files.writeString(file, "\nthree", java.nio.file.StandardOpenOption.APPEND);
+		model.updateIndex();
+		AtomicBoolean added = new AtomicBoolean();
+		list.addListener((javafx.collections.ListChangeListener<LogLine>) change -> {
+			while (change.next()) {
+				if (change.wasAdded()) {
+					assertEquals(1, change.getFrom());
+					assertEquals(3, change.getTo());
+					assertEquals(3, list.size());
+					added.set(true);
+				}
+			}
+		});
+		list.publish(model.snapshot());
+		list.publish(intermediate);
+		assertTrue(added.get());
+		assertEquals(3, list.size());
+		assertEquals("three", list.get(2).content());
+	}
+
+	@Test
+	public void replacementReportsValidRemovedAndAddedRanges() throws IOException {
+		Path file = tempDir.resolve("removed.log");
+		Files.writeString(file, "one\ntwo\nthree");
+		LogFileModel model = new LogFileModel(file);
+		VirtualLogList list = new VirtualLogList(model);
+		assertEquals("two", list.get(1).content());
+		AtomicBoolean replaced = new AtomicBoolean();
+		list.addListener((javafx.collections.ListChangeListener<LogLine>) change -> {
+			while (change.next()) {
+				assertTrue(change.wasReplaced());
+				assertEquals(0, change.getFrom());
+				assertEquals(1, change.getTo());
+				assertEquals(3, change.getRemovedSize());
+				assertEquals("two", change.getRemoved().get(1).content());
+				replaced.set(true);
+			}
+		});
+		Files.writeString(file, "new");
+		model.updateIndex();
+		list.publish(model.snapshot());
+		assertTrue(replaced.get());
+		assertEquals("new", list.get(0).content());
 	}
 
 	@Test

@@ -16,222 +16,299 @@
  */
 package ch.eitchnet.luminelog.model;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
-import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
 public class LogFileModel {
 
-	private static final Logger log = LoggerFactory.getLogger(LogFileModel.class);
-
 	private final Path filePath;
-	private Object fileIdentity;
-	private long[] lineOffsets = new long[1024];
-	private int lineCount = 0;
-	private long lastProcessedPosition = 0;
+	private Snapshot current;
 	private final ByteBuffer indexSearchBuffer = ByteBuffer.allocateDirect(16384);
 
 	public LogFileModel(Path filePath) throws IOException {
 		this.filePath = filePath;
-		this.fileIdentity = readFileIdentity();
-		indexFile();
+		updateIndex();
 	}
 
-	private Object readFileIdentity() throws IOException {
-		BasicFileAttributes attrs = Files.readAttributes(this.filePath, BasicFileAttributes.class);
+	private static Object identity(BasicFileAttributes attrs) {
 		Object fileKey = attrs.fileKey();
-		if (fileKey != null)
-			return fileKey;
-		return attrs.lastModifiedTime().toMillis() + ":" + attrs.size();
-	}
-
-	private void reopenIfReplaced() throws IOException {
-		Object currentIdentity = readFileIdentity();
-		if (Objects.equals(this.fileIdentity, currentIdentity))
-			return;
-
-		log.warn("Reopening file {} due to replacement", this.filePath);
-		this.fileIdentity = currentIdentity;
-		indexFile();
-	}
-
-	private void addOffset(long offset) {
-		if (lineCount == lineOffsets.length) {
-			int newSize = (int) (lineOffsets.length * 1.5);
-			long[] newOffsets = new long[newSize];
-			System.arraycopy(lineOffsets, 0, newOffsets, 0, lineOffsets.length);
-			lineOffsets = newOffsets;
-		}
-		lineOffsets[lineCount++] = offset;
-	}
-
-	private void indexFile() throws IOException {
-		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
-			lineCount = 0;
-			addOffset(0L);
-			long fileSize = raf.length();
-
-			FileChannel fileChannel = raf.getChannel();
-			long currentPos = 0;
-			while (currentPos < fileSize) {
-				indexSearchBuffer.clear();
-				int read = fileChannel.read(indexSearchBuffer, currentPos);
-				if (read <= 0)
-					break;
-				indexSearchBuffer.flip();
-				for (int i = 0; i < read; i++) {
-					if (indexSearchBuffer.get(i) == '\n') {
-						addOffset(currentPos + i + 1);
-					}
-				}
-				currentPos += read;
-			}
-			lastProcessedPosition = fileSize;
-		}
+		return fileKey != null ? fileKey : attrs.creationTime();
 	}
 
 	public Path getFilePath() {
 		return this.filePath;
 	}
 
-	public long getFileSize() throws IOException {
+	public synchronized long getFileSize() throws IOException {
 		return Files.size(this.filePath);
 	}
 
-	public long getLastModified() throws IOException {
+	public synchronized long getLastModified() throws IOException {
 		return Files.getLastModifiedTime(this.filePath).toMillis();
 	}
 
+	public synchronized Snapshot snapshot() {
+		return current;
+	}
+
+	private static byte[] readTail(RandomAccessFile raf, long size) throws IOException {
+		byte[] tail = new byte[(int) Math.min(4096, size)];
+		raf.seek(size - tail.length);
+		raf.readFully(tail);
+		return tail;
+	}
+
 	public synchronized void updateIndex() throws IOException {
-		reopenIfReplaced();
-
+		BasicFileAttributes attrs = Files.readAttributes(filePath, BasicFileAttributes.class);
+		Object fileIdentity = identity(attrs);
+		long fileSize = attrs.size();
+		boolean rebuild = current == null || !Objects.equals(current.fileIdentity, fileIdentity)
+				|| fileSize < current.fileSize
+				|| (fileSize == current.fileSize && !attrs.lastModifiedTime().equals(current.modified));
 		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
-			long fileSize = raf.length();
-			if (fileSize < lastProcessedPosition) {
-				// File truncated
-				lineCount = 0;
-				addOffset(0L);
-				lastProcessedPosition = 0;
-			}
-
-			if (fileSize == lastProcessedPosition)
+			if (!rebuild && fileSize > current.fileSize)
+				rebuild = !Arrays.equals(current.tail, readTail(raf, current.fileSize));
+			if (!rebuild && fileSize == current.fileSize)
 				return;
 
+			OffsetBuilder offsets = new OffsetBuilder(rebuild ? null : current.offsets);
+			if (rebuild)
+				offsets.add(0);
+			long currentPos = rebuild ? 0 : current.fileSize;
 			FileChannel channel = raf.getChannel();
-			long currentPos = lastProcessedPosition;
 			while (currentPos < fileSize) {
 				indexSearchBuffer.clear();
+				indexSearchBuffer.limit((int) Math.min(indexSearchBuffer.capacity(), fileSize - currentPos));
 				int read = channel.read(indexSearchBuffer, currentPos);
 				if (read <= 0)
-					break;
+					throw new IOException("File shortened while indexing " + filePath);
 				indexSearchBuffer.flip();
 				for (int i = 0; i < read; i++) {
-					if (indexSearchBuffer.get(i) == '\n') {
-						addOffset(currentPos + i + 1);
-					}
+					if (indexSearchBuffer.get(i) == '\n')
+						offsets.add(currentPos + i + 1);
 				}
 				currentPos += read;
 			}
-			lastProcessedPosition = fileSize;
+			byte[] tail = readTail(raf, fileSize);
+			BasicFileAttributes after = Files.readAttributes(filePath, BasicFileAttributes.class);
+			if (!Objects.equals(fileIdentity, identity(after)) || after.size() < fileSize
+					|| (after.size() == fileSize && !attrs.lastModifiedTime().equals(after.lastModifiedTime())))
+				throw new IOException("File changed while indexing " + filePath);
+			long version = current == null ? 1 : current.version + 1;
+			long generation = current == null ? 1 : current.generation + (rebuild ? 1 : 0);
+			current = new Snapshot(filePath, offsets.build(), fileSize, attrs.lastModifiedTime(), fileIdentity,
+					version, generation, tail);
 		}
 	}
 
-	public int getLineCount() {
-		return lineCount;
+	public synchronized int getLineCount() {
+		return current.lineCount();
 	}
 
 	public synchronized String getLine(int index) throws IOException {
-		if (index < 0 || index >= lineCount)
+		if (index < 0 || index >= current.lineCount())
 			return null;
-		Batch batch = readBatch(index);
-		return batch.getLines(this).get(0);
+		return current.readBatch(index).getLines().get(0);
 	}
 
-	public synchronized void iterateLines(int startLine, LineProcessor processor) throws IOException {
+	public void iterateLines(int startLine, LineProcessor processor) throws IOException {
+		Snapshot captured = snapshot();
+		if (startLine < 0)
+			throw new IOException("Negative start line: " + startLine);
 		int currentLine = startLine;
-		while (currentLine < lineCount) {
-			Batch batch = readBatch(currentLine);
-			List<String> lines = batch.getLines(this);
-			if (lines.isEmpty())
-				break;
-
-			for (String line : lines) {
+		while (currentLine < captured.lineCount()) {
+			for (String line : captured.readBatch(currentLine).getLines()) {
 				if (!processor.process(line, currentLine++))
 					return;
 			}
 		}
 	}
 
-	public record Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead) {
-		public List<String> getLines(LogFileModel model) {
-			List<String> lines = new ArrayList<>();
-			if (totalBytesToRead > 0) {
-				for (int i = startLine; i < endLine; i++) {
-					long relativeStart = model.lineOffsets[i] - startOffset;
-					long relativeEnd = (i + 1 < model.lineCount) ? model.lineOffsets[i + 1] - startOffset : totalBytesToRead;
-					int length = (int) (relativeEnd - relativeStart);
-					if (length <= 0) {
-						lines.add("");
-					} else {
-						lines.add(model.sanitizeLine(new String(bytes, (int) relativeStart, length)));
-					}
-				}
-			} else {
-				for (int i = startLine; i < endLine; i++) {
-					lines.add("");
-				}
-			}
-			return lines;
-		}
+	public synchronized Batch readBatch(int startLine) throws IOException {
+		return current.readBatch(startLine);
 	}
 
-	public Batch readBatch(int startLine) throws IOException {
-		int batchSize = 1000;
-		long maxBatchBytes = 1024 * 1024; // 1MB
+	/** Stable index boundaries, not a historical copy of the underlying file contents. */
+	public static final class Snapshot {
+		private final Path filePath;
+		private final OffsetIndex offsets;
+		private final long fileSize;
+		private final FileTime modified;
+		private final Object fileIdentity;
+		private final long version;
+		private final long generation;
+		private final byte[] tail;
 
-		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
-			long fileSize = raf.length();
-			long startOffset = lineOffsets[startLine];
-			int currentEndLine = startLine;
-			long batchBytes = 0;
+		private Snapshot(Path filePath, OffsetIndex offsets, long fileSize, FileTime modified, Object fileIdentity,
+				long version, long generation, byte[] tail) {
+			this.filePath = filePath;
+			this.offsets = offsets;
+			this.fileSize = fileSize;
+			this.modified = modified;
+			this.fileIdentity = fileIdentity;
+			this.version = version;
+			this.generation = generation;
+			this.tail = tail;
+		}
 
-			while (currentEndLine < lineCount && (currentEndLine - startLine) < batchSize && batchBytes < maxBatchBytes) {
-				long lineStart = lineOffsets[currentEndLine];
-				long lineEnd = (currentEndLine + 1 < lineCount) ? lineOffsets[currentEndLine + 1] : fileSize;
-				long lineLength = lineEnd - lineStart;
-				if (batchBytes + lineLength > maxBatchBytes && currentEndLine > startLine) {
+		public long version() { return version; }
+		public long generation() { return generation; }
+		public int lineCount() { return offsets.count; }
+		public long fileSize() { return fileSize; }
+		public long lastModified() { return modified.toMillis(); }
+
+		private long endOffset(int line) {
+			return line + 1 < lineCount() ? offsets.get(line + 1) : fileSize;
+		}
+
+		private void validate(RandomAccessFile raf) throws IOException {
+			BasicFileAttributes attrs = Files.readAttributes(filePath, BasicFileAttributes.class);
+			if (!Objects.equals(fileIdentity, identity(attrs)) || attrs.size() < fileSize
+					|| (attrs.size() == fileSize && !modified.equals(attrs.lastModifiedTime()))
+					|| !Arrays.equals(tail, readTail(raf, fileSize)))
+				throw new IOException("Snapshot no longer available for " + filePath);
+		}
+
+		public Batch readBatch(int startLine) throws IOException {
+			if (startLine < 0 || startLine >= lineCount())
+				throw new IOException("Line outside snapshot: " + startLine);
+			long startOffset = offsets.get(startLine);
+			int endLine = startLine;
+			long endOffset = startOffset;
+			while (endLine < lineCount() && endLine - startLine < 1000) {
+				long nextEnd = endOffset(endLine);
+				if (nextEnd - startOffset > 1024 * 1024 && endLine > startLine)
 					break;
-				}
-				batchBytes += lineLength;
-				currentEndLine++;
+				endOffset = nextEnd;
+				endLine++;
+				if (endOffset - startOffset >= 1024 * 1024)
+					break;
 			}
-
-			long endOffset = (currentEndLine < lineCount) ? lineOffsets[currentEndLine] : fileSize;
 			long totalBytesToRead = endOffset - startOffset;
-
-			byte[] bytes = new byte[0];
-			if (totalBytesToRead > 0) {
-				bytes = new byte[(int) totalBytesToRead];
+			if (totalBytesToRead < 0 || totalBytesToRead > Integer.MAX_VALUE - 8)
+				throw new IOException("Line too large to decode in " + filePath);
+			byte[] bytes = new byte[(int) totalBytesToRead];
+			try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "r")) {
+				validate(raf);
 				raf.seek(startOffset);
 				raf.readFully(bytes);
+				validate(raf);
 			}
-
-			return new Batch(bytes, startLine, currentEndLine, startOffset, totalBytesToRead);
+			List<String> decoded = new ArrayList<>();
+			for (int line = startLine; line < endLine; line++) {
+				long start = offsets.get(line) - startOffset;
+				long end = endOffset(line) - startOffset;
+				if (start < 0 || end < start || end > bytes.length)
+					throw new IOException("Invalid snapshot boundaries for " + filePath);
+				decoded.add(sanitizeLine(new String(bytes, (int) start, (int) (end - start), StandardCharsets.UTF_8)));
+			}
+			return new Batch(bytes, startLine, endLine, startOffset, totalBytesToRead, decoded);
 		}
 	}
 
-	private String sanitizeLine(String line) {
+	public static final class Batch {
+		private final byte[] bytes;
+		private final int startLine;
+		private final int endLine;
+		private final long startOffset;
+		private final long totalBytesToRead;
+		private final List<String> lines;
+
+		public Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead) {
+			this(bytes, startLine, endLine, startOffset, totalBytesToRead, decodeLines(bytes, endLine - startLine));
+		}
+
+		private Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead,
+				List<String> lines) {
+			this.bytes = bytes.clone();
+			this.startLine = startLine;
+			this.endLine = endLine;
+			this.startOffset = startOffset;
+			this.totalBytesToRead = totalBytesToRead;
+			this.lines = List.copyOf(lines);
+		}
+
+		private static List<String> decodeLines(byte[] bytes, int count) {
+			List<String> decoded = new ArrayList<>();
+			int start = 0;
+			for (int line = 0; line < count; line++) {
+				int end = start;
+				while (end < bytes.length && bytes[end++] != '\n') {
+				}
+				decoded.add(sanitizeLine(new String(bytes, start, end - start, StandardCharsets.UTF_8)));
+				start = end;
+			}
+			return decoded;
+		}
+
+		public byte[] bytes() { return bytes.clone(); }
+		public int startLine() { return startLine; }
+		public int endLine() { return endLine; }
+		public long startOffset() { return startOffset; }
+		public long totalBytesToRead() { return totalBytesToRead; }
+		public List<String> getLines() { return lines; }
+		public List<String> getLines(LogFileModel model) { return getLines(); }
+	}
+
+	// Immutable directory paths share full chunks; only the active chunk is copied on append.
+	private record OffsetIndex(Object[] root, int count) {
+		private long[] chunk(int index) {
+			Object[] node = root;
+			for (int shift = 20; shift > 0; shift -= 5)
+				node = (Object[]) node[(index >>> shift) & 31];
+			return (long[]) node[index & 31];
+		}
+
+		private long get(int index) {
+			return chunk(index >>> 10)[index & 1023];
+		}
+	}
+
+	private static final class OffsetBuilder {
+		private Object[] root;
+		private int count;
+		private long[] activeChunk;
+
+		private OffsetBuilder(OffsetIndex previous) {
+			root = previous == null ? new Object[32] : previous.root;
+			count = previous == null ? 0 : previous.count;
+		}
+
+		private static Object[] put(Object[] node, int shift, int index, long[] chunk) {
+			Object[] copy = node == null ? new Object[32] : node.clone();
+			int slot = (index >>> shift) & 31;
+			copy[slot] = shift == 0 ? chunk : put((Object[]) copy[slot], shift - 5, index, chunk);
+			return copy;
+		}
+
+		private void add(long offset) throws IOException {
+			if (count == Integer.MAX_VALUE)
+				throw new IOException("Too many lines to index");
+			if (activeChunk == null || (count & 1023) == 0) {
+				activeChunk = (count & 1023) == 0 ? new long[1024]
+						: new OffsetIndex(root, count).chunk(count >>> 10).clone();
+				root = put(root, 20, count >>> 10, activeChunk);
+			}
+			activeChunk[count++ & 1023] = offset;
+		}
+
+		private OffsetIndex build() {
+			return new OffsetIndex(root, count);
+		}
+	}
+
+	private static String sanitizeLine(String line) {
 		if (line.endsWith("\n")) {
 			line = line.substring(0, line.length() - 1);
 		}
@@ -241,7 +318,7 @@ public class LogFileModel {
 		return line;
 	}
 
-	public synchronized void iterateLines(LineProcessor processor) throws IOException {
+	public void iterateLines(LineProcessor processor) throws IOException {
 		iterateLines(0, processor);
 	}
 

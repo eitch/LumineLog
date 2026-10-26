@@ -19,6 +19,7 @@ package ch.eitchnet.luminelog.model;
 import javafx.collections.ObservableListBase;
 
 import java.io.IOException;
+import java.util.AbstractList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,8 @@ import java.util.Map;
 public class VirtualLogList extends ObservableListBase<LogLine> {
 
 	private final LogFileModel logModel;
+	private final Thread owner = Thread.currentThread();
+	private LogFileModel.Snapshot snapshot;
 	private final Map<Integer, LogLine> cache;
 	private static final int CACHE_SIZE = 1000;
 
@@ -33,6 +36,7 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 
 	public VirtualLogList(LogFileModel logModel) {
 		this.logModel = logModel;
+		this.snapshot = logModel.snapshot();
 		this.cache = new LinkedHashMap<>(CACHE_SIZE, 0.75f, true) {
 			@Override
 			protected boolean removeEldestEntry(Map.Entry<Integer, LogLine> eldest) {
@@ -52,13 +56,13 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 
 		if (currentBatch == null || index < currentBatch.startLine() || index >= currentBatch.endLine()) {
 			try {
-				currentBatch = logModel.readBatch(index);
+				currentBatch = snapshot.readBatch(index);
 			} catch (IOException e) {
 				return new LogLine(index + 1, "ERROR READING BATCH AT " + index + ": " + e.getMessage());
 			}
 		}
 
-		List<String> lines = currentBatch.getLines(logModel);
+		List<String> lines = currentBatch.getLines();
 		for (int i = 0; i < lines.size(); i++) {
 			int lineIndex = currentBatch.startLine() + i;
 			cache.putIfAbsent(lineIndex, new LogLine(lineIndex + 1, lines.get(i)));
@@ -69,29 +73,62 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 
 	@Override
 	public int size() {
-		return logModel.getLineCount();
+		return snapshot.lineCount();
 	}
 
 	public void fireSizeChanged(int oldSize, int newSize) {
+		publish(logModel.snapshot());
+	}
+
+	public LogFileModel.Snapshot snapshot() {
+		return snapshot;
+	}
+
+	public void publish(LogFileModel.Snapshot update) {
+		if (Thread.currentThread() != owner)
+			throw new IllegalStateException("Publish log updates on the list's owning thread");
+		if (update.version() <= snapshot.version())
+			return;
+		LogFileModel.Snapshot previous = snapshot;
+		int oldSize = size();
+		boolean reset = previous.generation() != update.generation();
+		Map<Integer, LogLine> removedCache = reset ? new LinkedHashMap<>(cache) : Map.of();
+		snapshot = update;
 		currentBatch = null;
-		if (newSize > oldSize) {
-			// Remove the previous last entry from cache if it was an empty line due to trailing newline
-			// because now it might have content.
-			if (oldSize > 0)
-				cache.remove(oldSize - 1);
-			beginChange();
-			nextAdd(oldSize, newSize);
+		beginChange();
+		try {
+			if (reset) {
+				cache.clear();
+				List<LogLine> removed = new AbstractList<>() {
+					@Override
+					public int size() {
+						return oldSize;
+					}
+
+					@Override
+					public LogLine get(int index) {
+						java.util.Objects.checkIndex(index, oldSize);
+						LogLine line = removedCache.get(index);
+						if (line != null)
+							return line;
+						try {
+							return new LogLine(index + 1, previous.readBatch(index).getLines().getFirst());
+						} catch (IOException e) {
+							return new LogLine(index + 1, "ERROR READING REMOVED LINE: " + e.getMessage());
+						}
+					}
+				};
+				nextReplace(0, size(), removed);
+			} else {
+				if (oldSize > 0) {
+					cache.remove(oldSize - 1);
+					nextUpdate(oldSize - 1);
+				}
+				if (size() > oldSize)
+					nextAdd(oldSize, size());
+			}
+		} finally {
 			endChange();
-		} else if (newSize < oldSize) {
-			// Probably truncated
-			cache.clear();
-			beginChange();
-			nextReplace(0, oldSize, java.util.Collections.emptyList());
-			nextAdd(0, newSize);
-			endChange();
-		} else {
-			// Size unchanged, but content may have changed (e.g. truncate + rewrite).
-			cache.clear();
 		}
 	}
 }

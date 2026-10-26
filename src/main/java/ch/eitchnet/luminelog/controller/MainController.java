@@ -55,6 +55,8 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 public class MainController {
@@ -90,7 +92,7 @@ public class MainController {
 	@FXML
 	private Menu historyMenu;
 
-	private boolean ignoreScrollEvents = false;
+	private boolean updatingTailCheckBox;
 	private String currentGroup = null;
 	private final List<HighlightRule> highlightRules = new ArrayList<>();
 	private final java.util.Map<TabState, java.util.Map<HighlightRule, Tab>> openOccurrenceTabs
@@ -102,12 +104,18 @@ public class MainController {
 		LogFileModel logModel;
 		VirtualLogList logItems;
 		Timer tailTimer;
-		ListView<LogLine> logListView;
+		LogListView logListView;
 		int[] highlightCounts;
 		int lastCountedLine = 0;
+		volatile boolean closed;
+		final AtomicReference<LogFileModel.Snapshot> pendingUpdate = new AtomicReference<>();
+		final AtomicBoolean updateQueued = new AtomicBoolean();
+		List<HighlightRule> countedRules = List.of();
+		long countedGeneration = -1;
+		int[] countsBeforeLastLine;
 
 		TabState(File file, String highlightGroup, LogFileModel logModel, VirtualLogList logItems,
-				ListView<LogLine> logListView) {
+				LogListView logListView) {
 			this.file = file;
 			this.highlightGroup = highlightGroup;
 			this.logModel = logModel;
@@ -116,6 +124,9 @@ public class MainController {
 		}
 
 		void stopTailing() {
+			closed = true;
+			pendingUpdate.set(null);
+			logListView.dispose();
 			if (tailTimer != null) {
 				tailTimer.cancel();
 				tailTimer = null;
@@ -165,29 +176,24 @@ public class MainController {
 				TabState state = (TabState) tab.getUserData();
 				if (state == null)
 					continue;
+				state.stopTailing();
 				Map<HighlightRule, Tab> ruleTabMap = this.openOccurrenceTabs.remove(state);
-				if (ruleTabMap != null)
+				if (ruleTabMap != null) {
+					for (Tab occurrence : ruleTabMap.values())
+						cancelOccurrenceSearch(occurrence);
 					this.occurrencesTabPane.getTabs().removeAll(ruleTabMap.values());
+				}
 			}
 		}
 	}
 
 	private void handleTailCheckBoxChanged(Boolean isSelected) {
-		if (!isSelected)
+		if (updatingTailCheckBox)
 			return;
 		TabState state = getActiveTabState();
 		if (state == null)
 			return;
-
-		int lineCount = state.logItems.size();
-		if (lineCount > 0) {
-			this.ignoreScrollEvents = true;
-			try {
-				state.logListView.scrollTo(lineCount - 1);
-			} finally {
-				this.ignoreScrollEvents = false;
-			}
-		}
+		state.logListView.followingProperty().set(isSelected);
 	}
 
 	private void handleActiveTabChanged(Tab oldTab, Tab newTab) {
@@ -198,6 +204,13 @@ public class MainController {
 			this.statusLabel.setText("No file opened");
 		} else {
 			TabState state = (TabState) newTab.getUserData();
+			updatingTailCheckBox = true;
+			try {
+				tailCheckBox.setSelected(state.logListView.followingProperty().get());
+			} finally {
+				updatingTailCheckBox = false;
+			}
+			state.logListView.requestTail();
 			updateFooterStatus(state);
 
 			if (state.highlightGroup != null && !state.highlightGroup.equals(this.currentGroup)) {
@@ -205,6 +218,7 @@ public class MainController {
 				loadHighlights(false);
 				this.highlightGroupComboBox.getSelectionModel().select(this.currentGroup);
 			}
+			state.logListView.refresh();
 		}
 
 		updateHighlightsBar();
@@ -220,9 +234,22 @@ public class MainController {
 
 	private void handleFontResize() {
 		saveHighlights();
-		TabState state = getActiveTabState();
-		if (state != null)
+		for (Tab tab : tabPane.getTabs()) {
+			TabState state = (TabState) tab.getUserData();
+			configureRowHeight(state.logListView);
 			state.logListView.refresh();
+			state.logListView.requestTail();
+		}
+		for (Tab tab : occurrencesTabPane.getTabs()) {
+			if (tab.getContent() instanceof VBox box) {
+				for (Node node : box.getChildren()) {
+					if (node instanceof ListView<?> list) {
+						configureRowHeight(list);
+						list.refresh();
+					}
+				}
+			}
+		}
 	}
 
 	private void handleWindowCloseRequest(WindowEvent e) {
@@ -558,13 +585,24 @@ public class MainController {
 		try {
 			LogFileModel logModel = new LogFileModel(file.toPath());
 			VirtualLogList logItems = new VirtualLogList(logModel);
-			ListView<LogLine> logListView = createLogListView();
+			LogListView logListView = createLogListView();
+			logListView.setItems(logItems);
 
 			Tab tab = new Tab();
 			Label tabLabel = new Label(file.getName());
 			Button closeBtn = new Button("×");
 			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
 			TabState state = new TabState(file, highlightGroup, logModel, logItems, logListView);
+			logListView.followingProperty().addListener((_, _, following) -> {
+				if (getActiveTabState() == state) {
+					updatingTailCheckBox = true;
+					try {
+						tailCheckBox.setSelected(following);
+					} finally {
+						updatingTailCheckBox = false;
+					}
+				}
+			});
 			closeBtn.setOnAction(_ -> closeTab(tab, false));
 			HBox graphic = new HBox(tabLabel, closeBtn);
 			graphic.setAlignment(Pos.CENTER);
@@ -586,63 +624,10 @@ public class MainController {
 			tabPane.getSelectionModel().select(tab);
 
 			updateHighlightsBar();
-			refreshLogView(state);
+			logListView.requestTail();
 			startTailing(state);
-
-			Platform.runLater(() -> {
-				this.ignoreScrollEvents = true;
-				try {
-					logListView.setItems(logItems);
-					if (tailCheckBox.isSelected()) {
-						int lineCount = logItems.size();
-						if (lineCount > 0) {
-							logListView.scrollTo(lineCount - 1);
-						}
-					}
-					setupScrollBarListener(tab, logListView);
-					updateFooterStatus(state);
-				} finally {
-					this.ignoreScrollEvents = false;
-				}
-			});
 		} catch (IOException e) {
 			DialogUtil.showError("Could not open file: " + e.getMessage());
-		}
-	}
-
-	private void setupScrollBarListener(Tab tab, ListView<LogLine> logListView) {
-		Node scrollBarNode = logListView.lookup(".scroll-bar:vertical");
-		if (scrollBarNode instanceof ScrollBar scrollBar) {
-			scrollBar
-					.valueProperty()
-					.addListener((_, oldVal, newVal) -> handleScrollBarChanged(tab, scrollBar, oldVal, newVal));
-		} else {
-			if (tabPane.getTabs().contains(tab)) {
-				Platform.runLater(() -> setupScrollBarListener(tab, logListView));
-			}
-		}
-	}
-
-	private void handleScrollBarChanged(Tab tab, ScrollBar scrollBar, Number oldVal, Number newVal) {
-		if (this.ignoreScrollEvents || tabPane.getSelectionModel().getSelectedItem() != tab)
-			return;
-
-		double value = newVal.doubleValue();
-		double precision = toPrecision(value, 8);
-		if (toPrecision(oldVal.doubleValue(), 8) == precision)
-			return;
-
-		double max = scrollBar.getMax();
-		if (precision < oldVal.doubleValue()) {
-			if (tailCheckBox.isSelected() && max > 0.0 && precision < max - 0.0001) {
-				tailCheckBox.setSelected(false);
-			}
-		} else {
-			if (max > 0.0 && precision >= max - 0.0001) {
-				if (!tailCheckBox.isSelected()) {
-					tailCheckBox.setSelected(true);
-				}
-			}
 		}
 	}
 
@@ -667,44 +652,6 @@ public class MainController {
 		clipboard.setContent(content);
 	}
 
-	private void setupDragSelection(ListView<LogLine> listView) {
-		listView.setOnMousePressed(event -> {
-			if (event.getButton() == MouseButton.PRIMARY) {
-				Node node = event.getPickResult().getIntersectedNode();
-				while (node != null && !(node instanceof ListCell)) {
-					node = node.getParent();
-				}
-				if (node instanceof ListCell<?> cell && cell.getItem() != null) {
-					listView.getProperties().put("dragAnchorIndex", cell.getIndex());
-				} else {
-					listView.getProperties().remove("dragAnchorIndex");
-				}
-			}
-		});
-
-		listView.setOnMouseDragged(event -> {
-			if (event.getButton() == MouseButton.PRIMARY) {
-				Node node = event.getPickResult().getIntersectedNode();
-				while (node != null && !(node instanceof ListCell)) {
-					node = node.getParent();
-				}
-
-				if (node instanceof ListCell<?> cell && cell.getItem() != null) {
-					Integer anchor = (Integer) listView.getProperties().get("dragAnchorIndex");
-					if (anchor != null) {
-						int index = cell.getIndex();
-						listView.getSelectionModel().clearSelection();
-						if (anchor <= index) {
-							listView.getSelectionModel().selectRange(anchor, index + 1);
-						} else {
-							listView.getSelectionModel().selectRange(index, anchor + 1);
-						}
-					}
-				}
-			}
-		});
-	}
-
 	private void setupCopyContextMenu(ListView<LogLine> listView) {
 		ContextMenu contextMenu = new ContextMenu();
 		MenuItem copyItem = new MenuItem("Copy Selected Lines");
@@ -724,7 +671,7 @@ public class MainController {
 
 		// Optional: Keyboard shortcut for copy
 		listView.setOnKeyPressed(e -> {
-			if (!e.isControlDown() || e.getCode() != KeyCode.C)
+			if (!e.isShortcutDown() || e.getCode() != KeyCode.C)
 				return;
 			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
 			if (selected != null && !selected.isEmpty()) {
@@ -734,16 +681,22 @@ public class MainController {
 						.collect(Collectors.joining(System.lineSeparator()));
 				copyToClipboard(text);
 			}
+			e.consume();
 		});
 	}
 
-	private ListView<LogLine> createLogListView() {
-		ListView<LogLine> logListView = new ListView<>();
-		logListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+	private LogListView createLogListView() {
+		LogListView logListView = new LogListView();
 		logListView.setCellFactory(getHighlightingCellCallback());
-		setupDragSelection(logListView);
+		configureRowHeight(logListView);
 		setupCopyContextMenu(logListView);
 		return logListView;
+	}
+
+	private void configureRowHeight(ListView<?> listView) {
+		Text sample = new Text("Ag");
+		sample.setFont(javafx.scene.text.Font.font("monospace", fontSizeSpinner.getValue()));
+		listView.setFixedCellSize(Math.ceil(sample.getLayoutBounds().getHeight()) + 4);
 	}
 
 	private record MatchWithColor(int start, int end, String color) {
@@ -757,54 +710,55 @@ public class MainController {
 		return null;
 	}
 
-	private void refreshLogView(TabState state) {
-		if (state != null && state.logItems != null) {
-			this.ignoreScrollEvents = true;
-			try {
-				int lineCount = state.logModel.getLineCount();
-				state.logItems.fireSizeChanged(0, lineCount);
-				if (lineCount > 0) {
-					state.logListView.scrollTo(lineCount - 1);
-				}
-				state.logListView.refresh();
-			} finally {
-				this.ignoreScrollEvents = false;
-			}
-		}
-	}
-
 	private void startTailing(TabState state) {
 		state.tailTimer = new Timer(true);
 		state.tailTimer.schedule(new TimerTask() {
+			private long lastVersion = state.logItems.snapshot().version();
+			private boolean failed;
+
 			@Override
 			public void run() {
-				if (state.logModel != null) {
+				if (!state.closed) {
 					try {
-						int oldCount = state.logModel.getLineCount();
 						state.logModel.updateIndex();
-						int newCount = state.logModel.getLineCount();
-						if (newCount != oldCount) {
-							Platform.runLater(() -> {
-								MainController.this.ignoreScrollEvents = true;
-								try {
- 								state.logItems.fireSizeChanged(oldCount, newCount);
- 								updateHighlightsBar();
- 								updateFooterStatus(state);
-								
- 								if (tailCheckBox.isSelected() && newCount > 0) {
-										state.logListView.scrollTo(newCount - 1);
-									}
-								} finally {
-									MainController.this.ignoreScrollEvents = false;
-								}
-							});
+						failed = false;
+						LogFileModel.Snapshot update = state.logModel.snapshot();
+						if (update.version() != lastVersion) {
+							lastVersion = update.version();
+							state.pendingUpdate.set(update);
+							queuePublication(state);
 						}
 					} catch (IOException e) {
-						// ignore or log
+						if (!failed)
+							logger.warn("Could not update log file {}", state.file, e);
+						failed = true;
 					}
 				}
 			}
 		}, 50, 50);
+	}
+
+	private void queuePublication(TabState state) {
+		if (state.closed || !state.updateQueued.compareAndSet(false, true))
+			return;
+		Platform.runLater(() -> {
+			LogFileModel.Snapshot update = state.pendingUpdate.getAndSet(null);
+			state.updateQueued.set(false);
+			if (state.closed || update == null)
+				return;
+			if (state.logItems.snapshot().generation() != update.generation()) {
+				state.logListView.cancelSelectionGesture();
+				state.logListView.getSelectionModel().clearSelection();
+			}
+			state.logItems.publish(update);
+			state.logListView.requestTail();
+			if (getActiveTabState() == state) {
+				updateHighlightsBar();
+				updateFooterStatus(state);
+			}
+			if (state.pendingUpdate.get() != null)
+				queuePublication(state);
+		});
 	}
 
 	@FXML
@@ -828,10 +782,18 @@ public class MainController {
 
 	private long lastUpdateHighlightsBar = 0;
 	private Thread highlightCounterThread = null;
+	private final javafx.animation.PauseTransition highlightsDelay
+			= new javafx.animation.PauseTransition(javafx.util.Duration.millis(500));
+	private TabState countingState;
+	private List<HighlightRule> countingRules = List.of();
+	private long countingGeneration = -1;
 
 	private void updateHighlightsBar() {
 		TabState state = getActiveTabState();
 		if (state == null || state.logModel == null || highlightRules.isEmpty()) {
+			highlightsDelay.stop();
+			if (highlightCounterThread != null)
+				highlightCounterThread.interrupt();
 			highlightsPane.getChildren().clear();
 			if (state != null) {
 				state.highlightCounts = null;
@@ -840,58 +802,66 @@ public class MainController {
 			return;
 		}
 
+		List<HighlightRule> currentRules = List.copyOf(highlightRules);
+		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
+		boolean sameJob = countingState == state && countingRules.equals(currentRules)
+				&& countingGeneration == snapshot.generation();
+		if (highlightCounterThread != null && highlightCounterThread.isAlive() && sameJob)
+			return;
+		if (highlightCounterThread != null)
+			highlightCounterThread.interrupt();
 		long now = System.currentTimeMillis();
-		if (now - lastUpdateHighlightsBar < 500) {
+		if (sameJob && now - lastUpdateHighlightsBar < 500) {
+			highlightsDelay.setDuration(javafx.util.Duration.millis(500 - (now - lastUpdateHighlightsBar)));
+			highlightsDelay.setOnFinished(_ -> updateHighlightsBar());
+			highlightsDelay.playFromStart();
 			return;
 		}
+		highlightsDelay.stop();
 		lastUpdateHighlightsBar = now;
-
-		if (highlightCounterThread != null && highlightCounterThread.isAlive()) {
-			highlightCounterThread.interrupt();
-		}
-
-		List<HighlightRule> currentRules = new ArrayList<>(highlightRules);
+		countingState = state;
+		countingRules = currentRules;
+		countingGeneration = snapshot.generation();
+		boolean incremental = state.highlightCounts != null && state.countsBeforeLastLine != null
+				&& state.countedRules.equals(currentRules) && state.countedGeneration == snapshot.generation();
+		int startLine = incremental ? Math.max(0, state.lastCountedLine - 1) : 0;
+		int[] counts = incremental ? state.countsBeforeLastLine.clone() : new int[currentRules.size()];
 		highlightCounterThread = new Thread(() -> {
-			int numRules = currentRules.size();
-			if (state.highlightCounts == null || state.highlightCounts.length != numRules) {
-				state.highlightCounts = new int[numRules];
-				state.lastCountedLine = 0;
-			}
-
-			int startLine = state.lastCountedLine;
-			int totalLines = state.logModel.getLineCount();
-
-			if (startLine < totalLines) {
-				try {
-					final int batchSize = 1000;
-					final long updateIntervalMs = 200;
-					final long[] lastUpdate = {System.currentTimeMillis()};
-
-					state.logModel.iterateLines(startLine, (line, lineNumber) -> {
-						if (Thread.currentThread().isInterrupted()) {
-							return false;
-						}
-
-						for (int j = 0; j < numRules; j++) {
-							state.highlightCounts[j] += currentRules.get(j).countOccurrences(line);
-						}
-						state.lastCountedLine = lineNumber + 1;
-
-						long currentTime = System.currentTimeMillis();
-						if (lineNumber % batchSize == 0 && (currentTime - lastUpdate[0] > updateIntervalMs)) {
-							lastUpdate[0] = currentTime;
-							final int[] intermediateCounts = state.highlightCounts.clone();
-							Platform.runLater(() -> updateHighlightsUI(currentRules, intermediateCounts));
-						}
-						return true;
-					});
-				} catch (IOException e) {
-					// ignore
+			int[] beforeLast = counts.clone();
+			try {
+				int index = startLine;
+				while (index < snapshot.lineCount()) {
+					for (String line : snapshot.readBatch(index).getLines()) {
+						if (Thread.currentThread().isInterrupted() || state.closed)
+							return;
+						if (index == snapshot.lineCount() - 1)
+							beforeLast = counts.clone();
+						for (int j = 0; j < currentRules.size(); j++)
+							counts[j] += currentRules.get(j).countOccurrences(line);
+						index++;
+					}
 				}
+			} catch (IOException e) {
+				logger.debug("Could not count highlights in {}", state.file, e);
+				return;
 			}
-
-			final int[] finalCounts = state.highlightCounts.clone();
-			Platform.runLater(() -> updateHighlightsUI(currentRules, finalCounts));
+			int[] baseline = beforeLast;
+			Thread worker = Thread.currentThread();
+			Platform.runLater(() -> {
+				if (highlightCounterThread != worker || state.closed || getActiveTabState() != state
+						|| !highlightRules.equals(currentRules)
+						|| state.logItems.snapshot().generation() != snapshot.generation())
+					return;
+				highlightCounterThread = null;
+				state.highlightCounts = counts;
+				state.countsBeforeLastLine = baseline;
+				state.lastCountedLine = snapshot.lineCount();
+				state.countedRules = currentRules;
+				state.countedGeneration = snapshot.generation();
+				updateHighlightsUI(currentRules, counts);
+				if (snapshot.version() != state.logItems.snapshot().version())
+					updateHighlightsBar();
+			});
 		}, "HighlightCounter");
 		highlightCounterThread.setDaemon(true);
 		highlightCounterThread.start();
@@ -966,6 +936,7 @@ public class MainController {
 
 		if (ruleTabMap.containsKey(rule)) {
 			occurrenceTab = ruleTabMap.get(rule);
+			cancelOccurrenceSearch(occurrenceTab);
 			occurrencesTabPane.getSelectionModel().select(occurrenceTab);
 			layout = (VBox) occurrenceTab.getContent();
 			header = (Label) layout.getChildren().get(0);
@@ -986,6 +957,7 @@ public class MainController {
 			occurrenceTab.setText("Searching: " + rule.getPattern());
 			ruleTabMap.put(rule, occurrenceTab);
 			occurrenceTab.setOnClosed(_ -> {
+				cancelOccurrenceSearch(occurrenceTab);
 				ruleTabMap.remove(rule);
 				if (ruleTabMap.isEmpty()) {
 					openOccurrenceTabs.remove(state);
@@ -1005,25 +977,25 @@ public class MainController {
 			occurrencesTabPane.getSelectionModel().select(occurrenceTab);
 		}
 
-		new Thread(() -> {
+		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
+		Thread search = new Thread(() -> {
+			Thread worker = Thread.currentThread();
 			List<LogLine> occurrences = new ArrayList<>();
 			try {
-				int totalLines = state.logModel.getLineCount();
-				state.logModel.iterateLines((line, lineNumber) -> {
-					if (line != null && rule.matches(line)) {
-						occurrences.add(new LogLine(lineNumber + 1, line));
+				int index = 0;
+				while (index < snapshot.lineCount()) {
+					for (String line : snapshot.readBatch(index).getLines()) {
+						if (worker.isInterrupted() || state.closed)
+							return;
+						if (rule.matches(line))
+							occurrences.add(new LogLine(index + 1, line));
+						index++;
 					}
-					if (lineNumber % 1000 == 0) {
-						double progress = (double) lineNumber / totalLines;
-						Platform.runLater(() -> {
-							progressBar.setProgress(progress);
-							header.setText("Searching for occurrences... (" + occurrences.size() + " found)");
-						});
-					}
-					return true;
-				});
+				}
 			} catch (IOException e) {
 				Platform.runLater(() -> {
+					if (!isCurrentOccurrenceSearch(state, occurrenceTab, worker))
+						return;
 					ruleTabMap.remove(rule);
 					if (ruleTabMap.isEmpty())
 						openOccurrenceTabs.remove(state);
@@ -1034,6 +1006,13 @@ public class MainController {
 			}
 
 			Platform.runLater(() -> {
+				if (!isCurrentOccurrenceSearch(state, occurrenceTab, worker))
+					return;
+				if (state.logItems.snapshot().generation() != snapshot.generation()) {
+					header.setText("File changed during search. Click the highlight to search again.");
+					layout.getChildren().remove(progressBar);
+					return;
+				}
 				progressBar.setProgress(1.0);
 				if (occurrences.isEmpty()) {
 					ruleTabMap.remove(rule);
@@ -1054,13 +1033,16 @@ public class MainController {
 				javafx.collections.ObservableList<LogLine> observableOccurrences = FXCollections.observableArrayList(
 						occurrences);
 
-				ListView<LogLine> listView = new ListView<>(observableOccurrences);
-				listView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+				LogListView listView = new LogListView();
+				listView.followingProperty().set(false);
+				listView.setItems(observableOccurrences);
+				configureRowHeight(listView);
 				listView.setCellFactory(getHighlightingCellCallback(rule));
-				setupDragSelection(listView);
 				setupCopyContextMenu(listView);
 				listView.setOnMouseClicked(event -> {
 					if (event.getClickCount() == 2) {
+						if (state.closed || state.logItems.snapshot().generation() != snapshot.generation())
+							return;
 						LogLine selected = listView.getSelectionModel().getSelectedItem();
 						if (selected != null) {
 							// If the current tab is not for the same file, then the tab should switch
@@ -1072,6 +1054,9 @@ public class MainController {
 							}
 
 							int index = selected.lineNumber() - 1;
+							if (index < 0 || index >= state.logItems.size())
+								return;
+							state.logListView.followingProperty().set(false);
 							state.logListView.getSelectionModel().select(index);
 							state.logListView.scrollTo(index);
 						}
@@ -1082,7 +1067,20 @@ public class MainController {
 				layout.getChildren().remove(progressBar);
 				layout.getChildren().add(listView);
 			});
-		}).start();
+		}, "OccurrenceSearch");
+		search.setDaemon(true);
+		occurrenceTab.getProperties().put("searchThread", search);
+		search.start();
+	}
+
+	private void cancelOccurrenceSearch(Tab tab) {
+		if (tab.getProperties().remove("searchThread") instanceof Thread thread)
+			thread.interrupt();
+	}
+
+	private boolean isCurrentOccurrenceSearch(TabState state, Tab tab, Thread worker) {
+		return !state.closed && tab.getProperties().get("searchThread") == worker
+				&& occurrencesTabPane.getTabs().contains(tab);
 	}
 
 	private Callback<ListView<LogLine>, ListCell<LogLine>> getHighlightingCellCallback() {
@@ -1218,14 +1216,14 @@ public class MainController {
 		return true;
 	}
 
-	private static TextFlow createTextFlow(LogLine item) {
+	private TextFlow createTextFlow(LogLine item) {
 		TextFlow textFlow = new TextFlow();
 		textFlow.setLineSpacing(0);
 		textFlow.setPadding(Insets.EMPTY);
-		textFlow.setMinHeight(16);
-		textFlow.setMaxHeight(16);
+		textFlow.setMinWidth(Region.USE_PREF_SIZE);
+		textFlow.setMouseTransparent(true);
 		addText(String.format("%5d: ", item.lineNumber()),
-				"-fx-font-family: 'monospace'; -fx-font-size: 12; -fx-fill: gray;", textFlow);
+				"-fx-font-family: 'monospace'; -fx-font-size: " + fontSizeSpinner.getValue() + "; -fx-fill: gray;", textFlow);
 		return textFlow;
 	}
 
@@ -1312,15 +1310,11 @@ public class MainController {
 			this.statusLabel.setText("No file opened");
 			return;
 		}
-		try {
-			long size = state.logModel.getFileSize();
-			long modified = state.logModel.getLastModified();
-			String sizeStr = humanReadableSize(size);
-			String dateStr = formatTimestamp(modified);
-			this.statusLabel.setText("File: " + state.file.getAbsolutePath() + " | Size: " + sizeStr + " | Modified: " + dateStr);
-		} catch (IOException e) {
-			this.statusLabel.setText("File: " + state.file.getAbsolutePath());
-		}
+		long size = state.logItems.snapshot().fileSize();
+		long modified = state.logItems.snapshot().lastModified();
+		String sizeStr = humanReadableSize(size);
+		String dateStr = formatTimestamp(modified);
+		this.statusLabel.setText("File: " + state.file.getAbsolutePath() + " | Size: " + sizeStr + " | Modified: " + dateStr);
 	}
 
 	private static String humanReadableSize(long bytes) {

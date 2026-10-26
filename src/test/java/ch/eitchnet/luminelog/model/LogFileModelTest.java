@@ -23,11 +23,18 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class LogFileModelTest {
 
@@ -163,6 +170,217 @@ public class LogFileModelTest {
 		assertEquals("New 1", model.getLine(0));
 		assertEquals("New 2", model.getLine(1));
 		assertEquals("", model.getLine(2));
+	}
+
+	@Test
+	public void testBatchSurvivesAppendAndTruncate() throws IOException {
+		Path logFile = tempDir.resolve("batch.log");
+		Files.writeString(logFile, "first\npartial");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Batch batch = model.readBatch(0);
+		Files.writeString(logFile, " completed\nnext", StandardOpenOption.APPEND);
+		model.updateIndex();
+		assertEquals(List.of("first", "partial"), batch.getLines(model));
+		Files.writeString(logFile, "x");
+		model.updateIndex();
+		assertEquals(List.of("first", "partial"), batch.getLines(model));
+	}
+
+	@Test
+	public void testSameSizeRewriteReindexesBoundaries() throws IOException {
+		Path logFile = tempDir.resolve("rewrite.log");
+		Files.writeString(logFile, "a\nbbb");
+		LogFileModel model = new LogFileModel(logFile);
+		FileTime previous = Files.getLastModifiedTime(logFile);
+		Files.writeString(logFile, "aaa\nb");
+		Files.setLastModifiedTime(logFile, FileTime.fromMillis(previous.toMillis() + 1000));
+		model.updateIndex();
+		assertEquals("aaa", model.getLine(0));
+		assertEquals("b", model.getLine(1));
+	}
+
+	@Test
+	public void testSnapshotFreezesPartialFinalLineAndMetadataAcrossAppend() throws IOException {
+		Path logFile = tempDir.resolve("snapshot.log");
+		Files.writeString(logFile, "héllo\r\npart");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		long originalSize = Files.size(logFile);
+		long originalModified = Files.getLastModifiedTime(logFile).toMillis();
+		assertSame(before, model.snapshot());
+		model.updateIndex();
+		assertSame(before, model.snapshot());
+		Files.writeString(logFile, "ial\nnew", StandardOpenOption.APPEND);
+		model.updateIndex();
+		assertEquals(List.of("héllo", "part"), before.readBatch(0).getLines());
+		assertEquals(2, before.lineCount());
+		assertEquals(originalSize, before.fileSize());
+		assertEquals(originalModified, before.lastModified());
+		assertEquals(before.version() + 1, model.snapshot().version());
+		assertEquals(before.generation(), model.snapshot().generation());
+		assertEquals(List.of("héllo", "partial", "new"), model.snapshot().readBatch(0).getLines());
+	}
+
+	@Test
+	public void testPartialLineAppendChangesVersionWithoutChangingLineCount() throws IOException {
+		Path logFile = tempDir.resolve("partial.log");
+		Files.writeString(logFile, "part");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		Files.writeString(logFile, "ial", StandardOpenOption.APPEND);
+		model.updateIndex();
+		assertEquals(before.lineCount(), model.snapshot().lineCount());
+		assertEquals(before.version() + 1, model.snapshot().version());
+		assertEquals(before.generation(), model.snapshot().generation());
+		assertEquals(List.of("part"), before.readBatch(0).getLines());
+		assertEquals("partial", model.getLine(0));
+	}
+
+	@Test
+	public void testBatchIsImmutableAndIndependentOfModel() throws IOException {
+		Path logFile = tempDir.resolve("immutable.log");
+		Files.writeString(logFile, "日本語\nlast");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Batch batch = model.snapshot().readBatch(0);
+		assertEquals(List.of("日本語", "last"), batch.getLines());
+		assertSame(batch.getLines(), batch.getLines(model));
+		assertThrows(UnsupportedOperationException.class, () -> batch.getLines().add("bad"));
+		byte[] originalBytes = batch.bytes();
+		originalBytes[0] = 0;
+		assertNotEquals(0, batch.bytes()[0]);
+		Files.delete(logFile);
+		assertEquals(List.of("日本語", "last"), batch.getLines());
+	}
+
+	@Test
+	public void testSameSizeRewriteWithSubMillisecondTimestamp() throws IOException {
+		Path logFile = tempDir.resolve("precise.log");
+		Files.writeString(logFile, "a\nbbb");
+		FileTime first = FileTime.from(Instant.ofEpochSecond(1700000000, 100));
+		FileTime second = FileTime.from(Instant.ofEpochSecond(1700000000, 200));
+		Files.setLastModifiedTime(logFile, first);
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		Files.writeString(logFile, "aaa\nb");
+		Files.setLastModifiedTime(logFile, second);
+		assertNotEquals(first, Files.getLastModifiedTime(logFile));
+		model.updateIndex();
+		assertEquals(before.lastModified(), model.snapshot().lastModified());
+		assertEquals(before.version() + 1, model.snapshot().version());
+		assertEquals(before.generation() + 1, model.snapshot().generation());
+		assertEquals(List.of("aaa", "b"), model.readBatch(0).getLines());
+		assertThrows(IOException.class, () -> before.readBatch(0));
+	}
+
+	@Test
+	public void testReplacementWithSameSizeAndTimestampChangesGeneration() throws IOException {
+		Path logFile = tempDir.resolve("identity.log");
+		Files.writeString(logFile, "a\nbbb");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		FileTime modified = Files.getLastModifiedTime(logFile);
+		Path replacement = tempDir.resolve("identity-new.log");
+		Files.writeString(replacement, "aaa\nb");
+		Files.setLastModifiedTime(replacement, modified);
+		Files.move(replacement, logFile, StandardCopyOption.REPLACE_EXISTING);
+		model.updateIndex();
+		assertEquals(before.version() + 1, model.snapshot().version());
+		assertEquals(before.generation() + 1, model.snapshot().generation());
+		assertEquals(List.of("aaa", "b"), model.readBatch(0).getLines());
+		assertThrows(IOException.class, () -> before.readBatch(0));
+	}
+
+	@Test
+	public void testTruncateAndRegrowPastPreviousSizeReindexes() throws IOException {
+		Path logFile = tempDir.resolve("regrow.log");
+		Files.writeString(logFile, "old\ncontent");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		Files.writeString(logFile, "new content\nlonger final line");
+		model.updateIndex();
+		assertEquals(before.generation() + 1, model.snapshot().generation());
+		assertEquals(before.version() + 1, model.snapshot().version());
+		assertEquals(List.of("new content", "longer final line"), model.readBatch(0).getLines());
+		assertThrows(IOException.class, () -> before.readBatch(0));
+	}
+
+	@Test
+	public void testTruncatedSnapshotReadFailsWithIOExceptionAndBatchRemainsUsable() throws IOException {
+		Path logFile = tempDir.resolve("short.log");
+		Files.writeString(logFile, "one\ntwo\nthree");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		LogFileModel.Batch batch = before.readBatch(0);
+		Files.writeString(logFile, "x");
+		assertThrows(IOException.class, () -> before.readBatch(2));
+		assertThrows(IOException.class, () -> model.readBatch(2));
+		assertThrows(IOException.class, () -> before.readBatch(-1));
+		assertThrows(IOException.class, () -> before.readBatch(before.lineCount()));
+		model.updateIndex();
+		assertEquals(before.generation() + 1, model.snapshot().generation());
+		assertEquals(List.of("one", "two", "three"), batch.getLines());
+	}
+
+	@Test
+	public void testSnapshotsAcrossOffsetChunks() throws IOException {
+		Path logFile = tempDir.resolve("chunks.log");
+		Files.writeString(logFile, "line\n".repeat(32760) + "partial");
+		LogFileModel model = new LogFileModel(logFile);
+		List<LogFileModel.Snapshot> snapshots = new ArrayList<>();
+		for (int i = 0; i < 20; i++) {
+			snapshots.add(model.snapshot());
+			Files.writeString(logFile, "\nnext", StandardOpenOption.APPEND);
+			model.updateIndex();
+		}
+		for (int i = 0; i < snapshots.size(); i++) {
+			LogFileModel.Snapshot captured = snapshots.get(i);
+			assertEquals(32761 + i, captured.lineCount());
+			assertEquals(List.of(i == 0 ? "partial" : "next"),
+					captured.readBatch(captured.lineCount() - 1).getLines());
+			assertEquals("line", captured.readBatch(1023).getLines().get(0));
+		}
+	}
+
+	@Test
+	public void testIterationDoesNotHoldMonitorAndKeepsSnapshotAcrossBatches() throws IOException {
+		Path logFile = tempDir.resolve("iteration-snapshot.log");
+		Files.writeString(logFile, "line\n".repeat(1100) + "partial");
+		LogFileModel model = new LogFileModel(logFile);
+		List<String> lines = new ArrayList<>();
+		model.iterateLines((line, number) -> {
+			assertFalse(Thread.holdsLock(model));
+			lines.add(line);
+			if (number == 0) {
+				try {
+					Files.writeString(logFile, " completed\nextra", StandardOpenOption.APPEND);
+					model.updateIndex();
+				} catch (IOException e) {
+					throw new AssertionError(e);
+				}
+			}
+			return true;
+		});
+		assertEquals(1101, lines.size());
+		assertEquals("partial", lines.getLast());
+		List<Integer> processed = new ArrayList<>();
+		model.iterateLines((_, number) -> {
+			processed.add(number);
+			return false;
+		});
+		assertEquals(List.of(0), processed);
+	}
+
+	@Test
+	public void testEmptyAndTrailingNewlineSemantics() throws IOException {
+		Path logFile = tempDir.resolve("empty.log");
+		Files.writeString(logFile, "");
+		LogFileModel model = new LogFileModel(logFile);
+		assertEquals(1, model.snapshot().lineCount());
+		assertEquals(List.of(""), model.snapshot().readBatch(0).getLines());
+		Files.writeString(logFile, "\r\n\n", StandardOpenOption.APPEND);
+		model.updateIndex();
+		assertEquals(List.of("", "", ""), model.readBatch(0).getLines());
+		assertTrue(model.getLine(-1) == null && model.getLine(3) == null);
 	}
 
 	@Test
