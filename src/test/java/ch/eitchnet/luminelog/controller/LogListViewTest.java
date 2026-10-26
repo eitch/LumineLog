@@ -1028,6 +1028,147 @@ class LogListViewTest {
 		}
 	}
 
+	@Test
+	void equivalentRulesAndColorChangesReuseCompletedCountsWithoutScanning() throws Exception {
+		Path file = tempDir.resolve("equivalent-counts.log");
+		Files.writeString(file, "ERROR\nERROR");
+		try (var service = new ScanService(Platform::runLater)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> count(ui.controller()));
+			awaitCount(ui.highlights(), 2);
+			fx(() -> {
+				Object counts = field(ui.tabs().getTabs().getFirst().getUserData(), "highlightCounts");
+				for (int i = 0; i < 100; i++) {
+					replaceCountRules(ui, new HighlightRule("ERROR", i % 2 == 0 ? "blue" : "red", false));
+					resetCountDelay(ui);
+					count(ui.controller());
+					assertEquals(false, field(ui.controller(), "countPending"), "Equivalent matching inputs must not scan");
+					assertSame(counts, field(ui.tabs().getTabs().getFirst().getUserData(), "highlightCounts"));
+					assertTrue(ui.highlights().getChildren().getFirst().getStyle().contains(i % 2 == 0 ? "blue" : "red"));
+				}
+			});
+		}
+	}
+
+	@Test
+	void inPlacePatternAndModeEditsInvalidateCounts() throws Exception {
+		Path file = tempDir.resolve("edited-counts.log");
+		Files.writeString(file, "ERROR\nERR.R");
+		try (var service = new ScanService(Platform::runLater)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> count(ui.controller()));
+			awaitCount(ui.highlights(), 1);
+			fx(() -> {
+				ui.rule().setPattern("ERR.R");
+				resetCountDelay(ui);
+				count(ui.controller());
+			});
+			awaitUi(() -> countLabel(ui).equals("ERR.R (1)"));
+			fx(() -> {
+				ui.rule().setIsRegex(true);
+				resetCountDelay(ui);
+				count(ui.controller());
+			});
+			awaitUi(() -> countLabel(ui).equals("ERR.R (2)"));
+		}
+	}
+
+	@Test
+	void pendingCountUsesCapturedMatchingInputsAndLatestEquivalentStyle() throws Exception {
+		Path file = tempDir.resolve("pending-counts.log");
+		Files.writeString(file, "ERROR\nERROR");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> count(ui.controller()));
+			workerFence(service);
+			fx(() -> {
+				replaceCountRules(ui, new HighlightRule("ERROR", "blue", false));
+				count(ui.controller());
+				drain(callbacks);
+				assertEquals("ERROR (2)", countLabel(ui));
+				assertTrue(ui.highlights().getChildren().getFirst().getStyle().contains("blue"));
+			});
+		}
+	}
+
+	@Test
+	void queuedCountCapturesRulesBeforeWorkerStarts() throws Exception {
+		Path file = tempDir.resolve("queued-count-inputs.log");
+		Files.writeString(file, "ERROR\nERROR");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		CountDownLatch started = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			service.submit(new Object(), _ -> {
+				started.countDown();
+				release.await();
+				return null;
+			}, (_, _) -> { });
+			assertTrue(started.await(10, TimeUnit.SECONDS));
+			ScanUi ui = scanUi(file, service);
+			fx(() -> {
+				count(ui.controller());
+				ui.rule().setPattern("missing");
+			});
+			release.countDown();
+			workerFence(service);
+			fx(() -> {
+				// Restoring the captured inputs makes the old result applicable again.
+				ui.rule().setPattern("ERROR");
+				drain(callbacks);
+				assertEquals("ERROR (2)", countLabel(ui));
+			});
+		} finally {
+			release.countDown();
+		}
+	}
+
+	@Test
+	void staleCountCannotPublishAfterInPlaceEditBeforeDelivery() throws Exception {
+		Path file = tempDir.resolve("stale-counts.log");
+		Files.writeString(file, "ERROR\nERROR");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> count(ui.controller()));
+			workerFence(service);
+			fx(() -> {
+				ui.rule().setPattern("missing");
+				drain(callbacks);
+				assertFalse(countLabel(ui).equals("missing (2)"), "Old worker counts must not be relabelled with edited inputs");
+				resetCountDelay(ui);
+				count(ui.controller());
+			});
+			workerFence(service);
+			fx(() -> {
+				drain(callbacks);
+				assertEquals("missing (0)", countLabel(ui));
+			});
+		}
+	}
+
+	private static String countLabel(ScanUi ui) {
+		if (ui.highlights().getChildren().isEmpty() || !(ui.highlights().getChildren().getFirst() instanceof HBox tag))
+			return "";
+		return ((Label) tag.getChildren().getFirst()).getText();
+	}
+
+	@SuppressWarnings("unchecked")
+	private static void replaceCountRules(ScanUi ui, HighlightRule rule) {
+		var rules = (java.util.List<HighlightRule>) field(ui.controller(), "highlightRules");
+		rules.clear();
+		rules.add(rule);
+	}
+
+	private static void resetCountDelay(ScanUi ui) {
+		try {
+			setField(ui.controller(), "lastUpdateHighlightsBar", 0L);
+		} catch (ReflectiveOperationException e) {
+			throw new AssertionError(e);
+		}
+	}
+
 	private record ScanUi(MainController controller, LogFileModel model, VirtualLogList items, TabPane tabs,
 			TabPane occurrences, FlowPane highlights, HighlightRule rule) {
 	}

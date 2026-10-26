@@ -448,8 +448,8 @@ mvn -Dtest=LogListViewTest test
 counting and span lookup. Gson-loaded rules initialize this transient cache on first use. Changing
 the pattern or matching mode resets it; unchanged inputs and color-only edits do not. Invalid
 expressions still produce no matches, and cache state is not saved in configuration. Concurrent
-first use shares one compilation attempt; this does not establish immutable matching inputs during
-concurrent edits (B12) or bound Java regex execution time (B18).
+first use shares one compilation attempt. Count workers capture immutable matching inputs (B12);
+Java regex execution time remains unbounded (B18).
 
 Measured operation-count evidence from `HighlightRuleTest`: for invalid expression `[` and input
 `error error`, 1,000 calls to each of the three matching operations previously caused **3,001**
@@ -460,6 +460,28 @@ Reproduce with:
 
 ```bash
 mvn -Dtest=HighlightRuleTest test
+```
+
+#### Reusing highlight counts (B12)
+
+Count identity is the ordered list of immutable `(pattern, matching mode)` signatures, independent
+of rule-object identity, color, and compilation state. Reloading equivalent rules or changing only
+colors reuses completed counts for the same snapshot without scanning; pending equivalent work
+continues and publishes with the latest rules/colors. Worker inputs are captured before submission,
+and results for edited matching inputs or invalidated generations cannot replace current counts.
+Pattern/mode/order changes trigger a full recount. Appends reuse counts before the previous final
+line and recount that line, including appends that complete a match without adding a newline.
+
+Deterministic regression evidence uses a two-line file containing `ERROR\nERROR`. Before the fix,
+the first equivalent-rule replacement launched another count job; afterwards that request launches
+zero jobs, and 100 alternating red/blue equivalent replacements retain the same count array with no
+pending scan. Tests reset the count throttle to avoid mistaking delayed work for reuse. These are
+job-launch/cache-reuse observations, not measured heap reductions or timing speedups. Held-callback
+and blocked-worker tests also cover edits before execution/delivery and latest-color publication.
+Reproduce with:
+
+```bash
+mvn -Dtest=HighlightRuleTest,LogListViewTest test
 ```
 
 ### Building a package

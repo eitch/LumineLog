@@ -138,8 +138,9 @@ public class MainController {
 		volatile long notifiedGeneration;
 		final AtomicReference<LogFileModel.Snapshot> pendingUpdate = new AtomicReference<>();
 		final AtomicBoolean updateQueued = new AtomicBoolean();
-		List<HighlightRule> countedRules = List.of();
+		List<HighlightRule.MatchingSignature> countedRules = List.of();
 		long countedGeneration = -1;
+		long countedVersion = -1;
 		int[] countsBeforeLastLine;
 		ScanService.Job<LogFileModel> openJob;
 		String openStatus = "Opening file...";
@@ -919,7 +920,7 @@ public class MainController {
 	private final javafx.animation.PauseTransition highlightsDelay
 			= new javafx.animation.PauseTransition(javafx.util.Duration.millis(500));
 	private TabState countingState;
-	private List<HighlightRule> countingRules = List.of();
+	private List<HighlightRule.MatchingSignature> countingRules = List.of();
 	private long countingGeneration = -1;
 
 	private void cancelHighlightCount() {
@@ -928,6 +929,10 @@ public class MainController {
 	}
 
 	private record HighlightCounts(int[] counts, int[] beforeLast) {
+	}
+
+	private List<HighlightRule.MatchingSignature> matchingSignatures() {
+		return highlightRules.stream().map(HighlightRule::matchingSignature).toList();
 	}
 
 	private void updateHighlightsBar() {
@@ -946,9 +951,17 @@ public class MainController {
 		}
 
 		List<HighlightRule> currentRules = List.copyOf(highlightRules);
+		List<HighlightRule.MatchingSignature> signatures = matchingSignatures();
 		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
-		boolean sameJob = countingState == state && countingRules.equals(currentRules)
+		boolean sameJob = countingState == state && countingRules.equals(signatures)
 				&& countingGeneration == snapshot.generation();
+		if (state.highlightCounts != null && state.countedRules.equals(signatures)
+				&& state.countedGeneration == snapshot.generation() && state.countedVersion == snapshot.version()) {
+			highlightsDelay.stop();
+			cancelHighlightCount();
+			updateHighlightsUI(currentRules, state.highlightCounts);
+			return;
+		}
 		if (countPending && sameJob)
 			return;
 		cancelHighlightCount();
@@ -962,14 +975,14 @@ public class MainController {
 		highlightsDelay.stop();
 		lastUpdateHighlightsBar = now;
 		countingState = state;
-		countingRules = currentRules;
+		countingRules = signatures;
 		countingGeneration = snapshot.generation();
 		boolean incremental = state.highlightCounts != null && state.countsBeforeLastLine != null
-				&& state.countedRules.equals(currentRules) && state.countedGeneration == snapshot.generation();
+				&& state.countedRules.equals(signatures) && state.countedGeneration == snapshot.generation();
 		int startLine = incremental ? Math.max(0, state.lastCountedLine - 1) : 0;
 		int[] counts = incremental ? state.countsBeforeLastLine.clone() : new int[currentRules.size()];
-		List<HighlightRule> workerRules = currentRules.stream()
-				.map(rule -> new HighlightRule(rule.getPattern(), rule.getColor(), rule.isIsRegex())).toList();
+		List<HighlightRule> workerRules = signatures.stream()
+				.map(signature -> new HighlightRule(signature.pattern(), null, signature.regex())).toList();
 		countPending = true;
 		scanService.<HighlightCounts>submit(highlightCountKey, job -> {
 			int[] beforeLast = counts.clone();
@@ -990,9 +1003,11 @@ public class MainController {
 			}
 			return new HighlightCounts(counts, beforeLast);
 		}, (job, event) -> {
-			if (disposed || state.closed || getActiveTabState() != state || !highlightRules.equals(currentRules)
-					|| state.logItems.snapshot().generation() != snapshot.generation())
+			if (disposed || state.closed || getActiveTabState() != state || !matchingSignatures().equals(signatures)
+					|| state.logItems.snapshot().generation() != snapshot.generation()) {
+				countPending = false;
 				return;
+			}
 			switch (event.state()) {
 			case QUEUED -> highlightsPane.getChildren().setAll(new Label("Highlight count queued..."));
 			case RUNNING -> highlightsPane.getChildren().setAll(new Label("Counting highlights..."));
@@ -1001,9 +1016,10 @@ public class MainController {
 				state.highlightCounts = event.result().counts();
 				state.countsBeforeLastLine = event.result().beforeLast();
 				state.lastCountedLine = snapshot.lineCount();
-				state.countedRules = currentRules;
+				state.countedRules = signatures;
 				state.countedGeneration = snapshot.generation();
-				updateHighlightsUI(currentRules, state.highlightCounts);
+				state.countedVersion = snapshot.version();
+				updateHighlightsUI(List.copyOf(highlightRules), state.highlightCounts);
 				if (snapshot.version() != state.logItems.snapshot().version())
 					updateHighlightsBar();
 			}
@@ -1021,7 +1037,7 @@ public class MainController {
 					logger.debug("Could not count highlights in {}", state.file, event.error());
 				Label error = new Label(message);
 				error.setTooltip(new Tooltip(message));
-				updateHighlightsUI(currentRules, null);
+				updateHighlightsUI(List.copyOf(highlightRules), null);
 				highlightsPane.getChildren().add(error);
 			}
 			}

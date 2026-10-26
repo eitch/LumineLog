@@ -31,6 +31,25 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class HighlightRuleTest {
 
 	@Test
+	void matchingSignatureIsImmutableAndExcludesStyleAndCompilationState() {
+		HighlightRule rule = new HighlightRule("ERROR", "red", false);
+		var signature = rule.matchingSignature();
+		HighlightRule restored = new Gson().fromJson(
+				"{\"pattern\":\"ERROR\",\"color\":\"blue\",\"isRegex\":false}", HighlightRule.class);
+		assertEquals(signature, restored.matchingSignature());
+		rule.setColor("green");
+		assertEquals(signature, rule.matchingSignature());
+		rule.setPattern("WARN");
+		assertEquals(new HighlightRule.MatchingSignature("ERROR", false), signature);
+		assertFalse(signature.equals(rule.matchingSignature()));
+		rule.setPattern("ERROR");
+		rule.setIsRegex(true);
+		assertFalse(signature.equals(rule.matchingSignature()));
+		restored.setIsRegex(true);
+		assertEquals(rule.matchingSignature(), restored.matchingSignature());
+	}
+
+	@Test
 	void invalidRegexCompilesOnceAcrossAllMatchingOperations() {
 		CountingRule rule = new CountingRule("[");
 		assertInvalidAcrossOperations(rule);

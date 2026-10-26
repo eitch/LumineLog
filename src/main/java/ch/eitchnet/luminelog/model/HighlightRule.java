@@ -43,6 +43,13 @@ public class HighlightRule {
 		return pattern;
 	}
 
+	public record MatchingSignature(String pattern, boolean regex) {
+	}
+
+	public synchronized MatchingSignature matchingSignature() {
+		return new MatchingSignature(pattern, isRegex);
+	}
+
 	public synchronized void setPattern(String pattern) {
 		if (Objects.equals(this.pattern, pattern))
 			return;
