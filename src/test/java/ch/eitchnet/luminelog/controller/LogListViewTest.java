@@ -20,6 +20,7 @@ import ch.eitchnet.luminelog.model.HighlightRule;
 import ch.eitchnet.luminelog.model.LogFileModel;
 import ch.eitchnet.luminelog.model.LogLine;
 import ch.eitchnet.luminelog.model.VirtualLogList;
+import ch.eitchnet.luminelog.service.ScanService;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -50,6 +51,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -61,6 +63,7 @@ class LogListViewTest {
 
 	private Stage stage;
 	private LogListView view;
+	private final java.util.List<MainController> controllers = new java.util.ArrayList<>();
 	@TempDir
 	Path tempDir;
 
@@ -107,6 +110,7 @@ class LogListViewTest {
 	@AfterEach
 	void close() throws Exception {
 		fx(() -> {
+			controllers.forEach(MainController::dispose);
 			if (view != null)
 				view.dispose();
 			if (stage != null)
@@ -250,6 +254,7 @@ class LogListViewTest {
 		fx(() -> {
 			try {
 				controller[0] = new MainController();
+				controllers.add(controller[0]);
 				items[0] = new VirtualLogList(model);
 				view = new LogListView();
 				view.setItems(items[0]);
@@ -332,6 +337,7 @@ class LogListViewTest {
 		fx(() -> {
 			try {
 				controller[0] = new MainController();
+				controllers.add(controller[0]);
 				items[0] = new VirtualLogList(model);
 				view = new LogListView();
 				view.setItems(items[0]);
@@ -360,28 +366,21 @@ class LogListViewTest {
 			output.setLength(2 * 1024 * 1024);
 		}
 		model.updateIndex();
-		Thread[] workers = new Thread[2];
 		fx(() -> {
 			try {
 				items[0].publish(model.snapshot());
 				setField(controller[0], "lastUpdateHighlightsBar", 0L);
 				count(controller[0]);
-				var counter = MainController.class.getDeclaredField("highlightCounterThread");
-				counter.setAccessible(true);
-				workers[0] = (Thread) counter.get(controller[0]);
 				var search = MainController.class.getDeclaredMethod("showOccurrences", HighlightRule.class);
 				search.setAccessible(true);
 				search.invoke(controller[0], rule);
-				workers[1] = (Thread) occurrences.getTabs().getFirst().getProperties().get("searchThread");
 			} catch (ReflectiveOperationException e) {
 				throw new AssertionError(e);
 			}
 		});
-		for (Thread worker : workers) {
-			assertNotNull(worker);
-			worker.join(10000);
-			assertFalse(worker.isAlive());
-		}
+		awaitUi(() -> !pane.getChildren().isEmpty() && pane.getChildren().getLast() instanceof Label label
+				&& label.getText().startsWith("Highlight counts unavailable:")
+				&& occurrences.getTabs().getFirst().getText().startsWith("Search failed:"));
 		fx(() -> {
 			assertEquals("ERROR (unavailable)",
 					((Label) ((HBox) pane.getChildren().getFirst()).getChildren().getFirst()).getText());
@@ -400,6 +399,209 @@ class LogListViewTest {
 			assertEquals(1, layout.getChildren().size());
 			assertTrue(((Label) layout.getChildren().getFirst()).getText().startsWith("Search incomplete;"));
 		});
+	}
+
+	@Test
+	void refreshingSearchSuppressesAlreadyCompletedOldResult() throws Exception {
+		Path file = tempDir.resolve("refresh-scan.log");
+		Files.writeString(file, "ERROR old");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> search(ui));
+			workerFence(service);
+			Files.writeString(file, "ERROR replacement\nERROR second");
+			ui.model().updateIndex();
+			fx(() -> {
+				ui.items().publish(ui.model().snapshot());
+				search(ui);
+			});
+			workerFence(service);
+			fx(() -> {
+				drain(callbacks);
+				assertEquals(1, ui.occurrences().getTabs().size());
+				var layout = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getFirst().getContent();
+				assertTrue(((Label) layout.getChildren().getFirst()).getText().startsWith("Found 2 occurrences."));
+				var list = (LogListView) layout.getChildren().get(1);
+				assertEquals(java.util.List.of(new LogLine(1, "ERROR replacement"), new LogLine(2, "ERROR second")),
+						list.getItems());
+			});
+		}
+	}
+
+	@Test
+	void closingSourceSuppressesPendingCountAndSearchPublication() throws Exception {
+		Path file = tempDir.resolve("closed-scans.log");
+		Files.writeString(file, "ERROR");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> {
+				count(ui.controller());
+				search(ui);
+			});
+			workerFence(service);
+			fx(() -> {
+				ui.tabs().getTabs().clear();
+				drain(callbacks);
+				assertTrue(ui.occurrences().getTabs().isEmpty());
+				assertTrue(ui.highlights().getChildren().isEmpty());
+			});
+		}
+	}
+
+	@Test
+	void closingResultTabAndDisposingControllerSuppressPendingResults() throws Exception {
+		Path file = tempDir.resolve("dispose-scans.log");
+		Files.writeString(file, "ERROR");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> search(ui));
+			workerFence(service);
+			fx(() -> {
+				Tab removed = ui.occurrences().getTabs().getFirst();
+				ui.occurrences().getTabs().clear();
+				drain(callbacks);
+				assertFalse(removed.getProperties().containsKey("searchJob"));
+				assertEquals(3, ((javafx.scene.layout.VBox) removed.getContent()).getChildren().size());
+				count(ui.controller());
+				search(ui);
+			});
+			workerFence(service);
+			fx(() -> {
+				var layout = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getFirst().getContent();
+				ui.controller().dispose();
+				ui.controller().dispose();
+				drain(callbacks);
+				assertTrue(ui.highlights().getChildren().isEmpty());
+				assertEquals(3, layout.getChildren().size());
+				assertTrue(layout.getChildren().stream().noneMatch(LogListView.class::isInstance));
+			});
+		}
+	}
+
+	@Test
+	void queuedSearchCanBeCancelledAndOverloadIsVisible() throws Exception {
+		Path file = tempDir.resolve("queued-scans.log");
+		Files.writeString(file, "ERROR");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		CountDownLatch started = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		try (var service = new ScanService(1, 2, callbacks::add)) {
+			service.submit(new Object(), job -> {
+				started.countDown();
+				release.await();
+				return null;
+			}, (_, _) -> { });
+			assertTrue(started.await(10, TimeUnit.SECONDS));
+			ScanUi ui = scanUi(file, service);
+			fx(() -> {
+				count(ui.controller());
+				search(ui);
+				invoke(ui.controller(), "showOccurrences", new Class<?>[] { HighlightRule.class },
+						new HighlightRule("different", "#ff8080", false));
+				drain(callbacks);
+				var first = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getFirst().getContent();
+				assertEquals("Search queued...", ((Label) first.getChildren().getFirst()).getText());
+				var rejected = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getLast().getContent();
+				assertTrue(((Label) rejected.getChildren().getFirst()).getText().startsWith("Scan capacity reached;"));
+				((javafx.scene.control.Button) first.getChildren().get(2)).fire();
+				drain(callbacks);
+				assertEquals("Search cancelled; no results published.",
+						((Label) first.getChildren().getFirst()).getText());
+				assertEquals(1, first.getChildren().size());
+				ui.controller().dispose();
+				drain(callbacks);
+			});
+		} finally {
+			release.countDown();
+		}
+	}
+
+	private record ScanUi(MainController controller, LogFileModel model, VirtualLogList items, TabPane tabs,
+			TabPane occurrences, FlowPane highlights, HighlightRule rule) {
+	}
+
+	private ScanUi scanUi(Path file, ScanService service) throws Exception {
+		LogFileModel model = new LogFileModel(file);
+		ScanUi[] result = new ScanUi[1];
+		fx(() -> {
+			try {
+				MainController controller = new MainController(service);
+				controllers.add(controller);
+				VirtualLogList items = new VirtualLogList(model);
+				view = new LogListView();
+				view.setItems(items);
+				var type = Class.forName(MainController.class.getName() + "$TabState");
+				var constructor = type.getDeclaredConstructors()[0];
+				constructor.setAccessible(true);
+				Tab tab = new Tab();
+				tab.setUserData(constructor.newInstance(file.toFile(), "Default", model, items, view));
+				TabPane tabs = new TabPane(tab);
+				TabPane occurrences = new TabPane();
+				FlowPane highlights = new FlowPane();
+				setField(controller, "tabPane", tabs);
+				setField(controller, "occurrencesTabPane", occurrences);
+				setField(controller, "highlightsPane", highlights);
+				setField(controller, "mainSplitPane", new javafx.scene.control.SplitPane(tabs, occurrences));
+				setField(controller, "fontSizeSpinner", new javafx.scene.control.Spinner<Integer>(8, 32, 12));
+				var rules = MainController.class.getDeclaredField("highlightRules");
+				rules.setAccessible(true);
+				@SuppressWarnings("unchecked")
+				var values = (java.util.List<HighlightRule>) rules.get(controller);
+				HighlightRule rule = new HighlightRule("ERROR", "#ff8080", false);
+				values.add(rule);
+				tabs.getTabs().addListener((ListChangeListener<Tab>) change -> invoke(controller, "handleRemovedTabs",
+						new Class<?>[] { ListChangeListener.Change.class }, change));
+				occurrences.getTabs().addListener((ListChangeListener<Tab>) change -> invoke(controller,
+						"handleOcurrencesTabChanged", new Class<?>[] { ListChangeListener.Change.class }, change));
+				result[0] = new ScanUi(controller, model, items, tabs, occurrences, highlights, rule);
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+		return result[0];
+	}
+
+	private static void search(ScanUi ui) {
+		invoke(ui.controller(), "showOccurrences", new Class<?>[] { HighlightRule.class }, ui.rule());
+	}
+
+	private static void invoke(Object target, String name, Class<?>[] types, Object... arguments) {
+		try {
+			var method = target.getClass().getDeclaredMethod(name, types);
+			method.setAccessible(true);
+			method.invoke(target, arguments);
+		} catch (ReflectiveOperationException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	private static void workerFence(ScanService service) throws Exception {
+		CountDownLatch reached = new CountDownLatch(1);
+		service.submit(new Object(), _ -> {
+			reached.countDown();
+			return null;
+		}, (_, _) -> { });
+		assertTrue(reached.await(10, TimeUnit.SECONDS));
+	}
+
+	private static void drain(java.util.Queue<Runnable> callbacks) {
+		Runnable callback;
+		while ((callback = callbacks.poll()) != null)
+			callback.run();
+	}
+
+	private static void awaitUi(java.util.function.BooleanSupplier condition) throws Exception {
+		for (int attempt = 0; attempt < 30; attempt++) {
+			boolean[] found = new boolean[1];
+			fx(() -> found[0] = condition.getAsBoolean());
+			if (found[0])
+				return;
+			pulses();
+		}
+		fail("UI state did not arrive");
 	}
 
 	private void awaitCount(FlowPane pane, int expected) throws Exception {

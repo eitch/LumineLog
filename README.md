@@ -157,6 +157,40 @@ java -Xms128m -Xmx128m -XX:+UseSerialGC \
   -cp "target/classes:$(<target/cache-probe-classpath.txt)" src/test/probes/WeightedCacheProbe.java
 ```
 
+#### Bounded background scans (B04)
+
+Occurrence searches and highlight counts share one `ScanService` with **two daemon workers**
+and **eight waiting jobs** (`DEFAULT_WORKERS`, `DEFAULT_QUEUE_CAPACITY`). Overload never runs
+a scan on the JavaFX thread: the view reports capacity exhaustion instead. Searches show
+queued/running/cancelled/error states and offer a **Cancel search** button; click the highlight
+again to refresh or retry. Counts show queued/running/unavailable states. Superseded count jobs
+are coalesced, and queued cancellations immediately free their queue slots.
+
+Workers capture snapshot boundaries and separate rule inputs. Per-job tokens are checked when
+callbacks reach the FX thread, so refreshed/closed tabs cannot receive stale results. Closing
+source or occurrence tabs cancels their work, including programmatic tab removal. Orderly
+application shutdown cancels all scans and releases queued work without waiting on matching.
+Snapshot read failures publish no partial search results or successful counts.
+
+Cancellation is cooperative between reads/matches and interrupts running workers, but **Java
+regex matching may ignore interruption**. A stuck match continues occupying its worker; no
+replacement thread is created. Thus B04 bounds worker/queue counts, **not regex execution time**
+or total memory. Adversarial patterns can still occupy both scan workers, and visible-row regex
+highlighting still runs on the FX thread. A safe regex policy remains B18. Matching result text
+is still retained in memory until B07/B08; this service does not establish a global heap budget.
+
+Scheduling-counter evidence on Linux 7.2.11 amd64, Azul OpenJDK 27+35, using
+`-Xms64m -Xmx64m` (67,108,864-byte max heap): 100 independent latch-blocked requests produced
+**100 active threads** with a reproduction of the former one-thread-per-search launch policy.
+The same workload through `ScanService` produced **2 active workers, 8 queued jobs, and 90
+explicit rejections**. Work deliberately ignores interruption until released. This compares
+scheduling policies, not end-to-end scan throughput, regex safety, or retained heap; there is no
+file I/O or decoded-result fixture, so storage is not involved. Reproduce after `mvn test`:
+
+```bash
+java -Xms64m -Xmx64m -cp target/classes src/test/probes/ScanConcurrencyProbe.java
+```
+
 ### Building a package
 
 ```bash

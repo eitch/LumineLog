@@ -18,6 +18,7 @@ package ch.eitchnet.luminelog.controller;
 
 import ch.eitchnet.luminelog.LumineLogApplication;
 import ch.eitchnet.luminelog.model.*;
+import ch.eitchnet.luminelog.service.ScanService;
 import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -64,6 +65,17 @@ public class MainController {
 	private static final Logger logger = LoggerFactory.getLogger(MainController.class);
 
 	private final ConfigService configService = new ConfigService();
+	private final ScanService scanService;
+	private final Object highlightCountKey = new Object();
+	private boolean disposed;
+
+	public MainController() {
+		this(new ScanService(Platform::runLater));
+	}
+
+	MainController(ScanService scanService) {
+		this.scanService = scanService;
+	}
 
 	@FXML
 	private VBox rootContainer;
@@ -152,7 +164,7 @@ public class MainController {
 
 		this.occurrencesTabPane
 				.getTabs()
-				.addListener((javafx.collections.ListChangeListener<Tab>) _ -> handleOcurrencesTabChanged());
+				.addListener(this::handleOcurrencesTabChanged);
 		this.mainSplitPane.setDividerPositions(1.0);
 
 		this.tabPane
@@ -177,6 +189,8 @@ public class MainController {
 				if (state == null)
 					continue;
 				state.stopTailing();
+				if (countingState == state)
+					cancelHighlightCount();
 				Map<HighlightRule, Tab> ruleTabMap = this.openOccurrenceTabs.remove(state);
 				if (ruleTabMap != null) {
 					for (Tab occurrence : ruleTabMap.values())
@@ -224,7 +238,15 @@ public class MainController {
 		updateHighlightsBar();
 	}
 
-	private void handleOcurrencesTabChanged() {
+	private void handleOcurrencesTabChanged(ListChangeListener.Change<? extends Tab> change) {
+		while (change.next()) {
+			for (Tab tab : change.getRemoved()) {
+				cancelOccurrenceSearch(tab);
+				for (var tabs : openOccurrenceTabs.values())
+					tabs.values().removeIf(value -> value == tab);
+				openOccurrenceTabs.values().removeIf(Map::isEmpty);
+			}
+		}
 		if (this.occurrencesTabPane.getTabs().isEmpty()) {
 			this.mainSplitPane.setDividerPositions(1.0);
 		} else if (this.mainSplitPane.getDividerPositions()[0] > 0.95) {
@@ -785,19 +807,28 @@ public class MainController {
 	}
 
 	private long lastUpdateHighlightsBar = 0;
-	private Thread highlightCounterThread = null;
+	private boolean countPending;
 	private final javafx.animation.PauseTransition highlightsDelay
 			= new javafx.animation.PauseTransition(javafx.util.Duration.millis(500));
 	private TabState countingState;
 	private List<HighlightRule> countingRules = List.of();
 	private long countingGeneration = -1;
 
+	private void cancelHighlightCount() {
+		countPending = false;
+		scanService.cancel(highlightCountKey);
+	}
+
+	private record HighlightCounts(int[] counts, int[] beforeLast) {
+	}
+
 	private void updateHighlightsBar() {
+		if (disposed)
+			return;
 		TabState state = getActiveTabState();
 		if (state == null || state.logModel == null || highlightRules.isEmpty()) {
 			highlightsDelay.stop();
-			if (highlightCounterThread != null)
-				highlightCounterThread.interrupt();
+			cancelHighlightCount();
 			highlightsPane.getChildren().clear();
 			if (state != null) {
 				state.highlightCounts = null;
@@ -810,10 +841,9 @@ public class MainController {
 		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
 		boolean sameJob = countingState == state && countingRules.equals(currentRules)
 				&& countingGeneration == snapshot.generation();
-		if (highlightCounterThread != null && highlightCounterThread.isAlive() && sameJob)
+		if (countPending && sameJob)
 			return;
-		if (highlightCounterThread != null)
-			highlightCounterThread.interrupt();
+		cancelHighlightCount();
 		long now = System.currentTimeMillis();
 		if (sameJob && now - lastUpdateHighlightsBar < 500) {
 			highlightsDelay.setDuration(javafx.util.Duration.millis(500 - (now - lastUpdateHighlightsBar)));
@@ -830,61 +860,64 @@ public class MainController {
 				&& state.countedRules.equals(currentRules) && state.countedGeneration == snapshot.generation();
 		int startLine = incremental ? Math.max(0, state.lastCountedLine - 1) : 0;
 		int[] counts = incremental ? state.countsBeforeLastLine.clone() : new int[currentRules.size()];
-		highlightsPane.getChildren().setAll(new Label("Counting highlights..."));
-		highlightCounterThread = new Thread(() -> {
+		List<HighlightRule> workerRules = currentRules.stream()
+				.map(rule -> new HighlightRule(rule.getPattern(), rule.getColor(), rule.isIsRegex())).toList();
+		countPending = true;
+		scanService.<HighlightCounts>submit(highlightCountKey, job -> {
 			int[] beforeLast = counts.clone();
-			try {
-				int index = startLine;
-				while (index < snapshot.lineCount()) {
-					for (String line : snapshot.readBatch(index).getLines()) {
-						if (Thread.currentThread().isInterrupted() || state.closed)
-							return;
-						if (index == snapshot.lineCount() - 1)
-							beforeLast = counts.clone();
-						for (int j = 0; j < currentRules.size(); j++)
-							counts[j] += currentRules.get(j).countOccurrences(line);
-						index++;
+			int index = startLine;
+			while (index < snapshot.lineCount()) {
+				if (job.isCancelled() || state.closed)
+					return null;
+				for (String line : snapshot.readBatch(index).getLines()) {
+					if (index == snapshot.lineCount() - 1)
+						beforeLast = counts.clone();
+					for (int j = 0; j < workerRules.size(); j++) {
+						if (job.isCancelled() || state.closed)
+							return null;
+						counts[j] += workerRules.get(j).countOccurrences(line);
 					}
+					index++;
 				}
-			} catch (IOException e) {
-				logger.debug("Could not count highlights in {}", state.file, e);
-				Thread worker = Thread.currentThread();
-				Platform.runLater(() -> {
-					if (highlightCounterThread != worker || state.closed || getActiveTabState() != state
-							|| !highlightRules.equals(currentRules)
-							|| state.logItems.snapshot().generation() != snapshot.generation())
-						return;
-					highlightCounterThread = null;
-					state.highlightCounts = null;
-					state.countsBeforeLastLine = null;
-					state.lastCountedLine = 0;
-					Label error = new Label("Highlight counts unavailable: " + e.getMessage());
-					error.setTooltip(new Tooltip(error.getText()));
-					updateHighlightsUI(currentRules, null);
-					highlightsPane.getChildren().add(error);
-				});
-				return;
 			}
-			int[] baseline = beforeLast;
-			Thread worker = Thread.currentThread();
-			Platform.runLater(() -> {
-				if (highlightCounterThread != worker || state.closed || getActiveTabState() != state
-						|| !highlightRules.equals(currentRules)
-						|| state.logItems.snapshot().generation() != snapshot.generation())
-					return;
-				highlightCounterThread = null;
-				state.highlightCounts = counts;
-				state.countsBeforeLastLine = baseline;
+			return new HighlightCounts(counts, beforeLast);
+		}, (job, event) -> {
+			if (disposed || state.closed || getActiveTabState() != state || !highlightRules.equals(currentRules)
+					|| state.logItems.snapshot().generation() != snapshot.generation())
+				return;
+			switch (event.state()) {
+			case QUEUED -> highlightsPane.getChildren().setAll(new Label("Highlight count queued..."));
+			case RUNNING -> highlightsPane.getChildren().setAll(new Label("Counting highlights..."));
+			case SUCCEEDED -> {
+				countPending = false;
+				state.highlightCounts = event.result().counts();
+				state.countsBeforeLastLine = event.result().beforeLast();
 				state.lastCountedLine = snapshot.lineCount();
 				state.countedRules = currentRules;
 				state.countedGeneration = snapshot.generation();
-				updateHighlightsUI(currentRules, counts);
+				updateHighlightsUI(currentRules, state.highlightCounts);
 				if (snapshot.version() != state.logItems.snapshot().version())
 					updateHighlightsBar();
-			});
-		}, "HighlightCounter");
-		highlightCounterThread.setDaemon(true);
-		highlightCounterThread.start();
+			}
+			case CANCELLED, FAILED, REJECTED -> {
+				countPending = false;
+				state.highlightCounts = null;
+				state.countsBeforeLastLine = null;
+				state.lastCountedLine = 0;
+				String message = switch (event.state()) {
+				case CANCELLED -> "Highlight count cancelled";
+				case REJECTED -> "Scan capacity reached; highlight counts unavailable. Try again shortly.";
+				default -> "Highlight counts unavailable: " + event.error().getMessage();
+				};
+				if (event.error() != null)
+					logger.debug("Could not count highlights in {}", state.file, event.error());
+				Label error = new Label(message);
+				error.setTooltip(new Tooltip(message));
+				updateHighlightsUI(currentRules, null);
+				highlightsPane.getChildren().add(error);
+			}
+			}
+		});
 	}
 
 	private void updateHighlightsUI(List<HighlightRule> currentRules, int[] counts) {
@@ -944,7 +977,7 @@ public class MainController {
 
 	private void showOccurrences(HighlightRule rule) {
 		TabState state = getActiveTabState();
-		if (state == null || state.logModel == null)
+		if (disposed || state == null || state.closed || state.logModel == null)
 			return;
 
 		java.util.Map<HighlightRule, Tab> ruleTabMap = openOccurrenceTabs.computeIfAbsent(state,
@@ -960,16 +993,9 @@ public class MainController {
 			occurrencesTabPane.getSelectionModel().select(occurrenceTab);
 			layout = (VBox) occurrenceTab.getContent();
 			header = (Label) layout.getChildren().get(0);
-			if (layout.getChildren().size() > 1 && layout.getChildren().get(1) instanceof ListView) {
-				layout.getChildren().remove(1); // remove the ListView to show progress
-			}
-			if (layout.getChildren().size() == 1) {
-				progressBar = new ProgressBar(0);
-				progressBar.setMaxWidth(Double.MAX_VALUE);
-				layout.getChildren().add(progressBar);
-			} else {
-				progressBar = (ProgressBar) layout.getChildren().get(1);
-			}
+			progressBar = new ProgressBar(0);
+			progressBar.setMaxWidth(Double.MAX_VALUE);
+			layout.getChildren().setAll(header, progressBar);
 			header.setText("Refreshing occurrences...");
 			progressBar.setProgress(0);
 		} else {
@@ -997,43 +1023,55 @@ public class MainController {
 			occurrencesTabPane.getSelectionModel().select(occurrenceTab);
 		}
 
+		Button cancel = new Button("Cancel search");
+		cancel.setOnAction(_ -> scanService.cancel(occurrenceTab));
+		layout.getChildren().add(cancel);
+		HighlightRule workerRule = new HighlightRule(rule.getPattern(), rule.getColor(), rule.isIsRegex());
 		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
-		Thread search = new Thread(() -> {
-			Thread worker = Thread.currentThread();
+		ScanService.Job<List<LogLine>> search = scanService.<List<LogLine>>submit(occurrenceTab, job -> {
 			List<LogLine> occurrences = new ArrayList<>();
-			try {
-				int index = 0;
-				while (index < snapshot.lineCount()) {
-					for (String line : snapshot.readBatch(index).getLines()) {
-						if (worker.isInterrupted() || state.closed)
-							return;
-						if (rule.matches(line))
-							occurrences.add(new LogLine(index + 1, line));
-						index++;
-					}
+			int index = 0;
+			while (index < snapshot.lineCount()) {
+				if (job.isCancelled() || state.closed)
+					return null;
+				for (String line : snapshot.readBatch(index).getLines()) {
+					if (job.isCancelled() || state.closed)
+						return null;
+					if (workerRule.matches(line))
+						occurrences.add(new LogLine(index + 1, line));
+					index++;
 				}
-			} catch (IOException e) {
-				Platform.runLater(() -> {
-					if (!isCurrentOccurrenceSearch(state, occurrenceTab, worker))
-						return;
-					occurrenceTab.getProperties().remove("searchThread");
-					occurrenceTab.setText("Search failed: " + rule.getPattern());
-					header.setText("Search incomplete; no results published. " + e.getMessage());
-					header.setWrapText(true);
-					header.setTooltip(new Tooltip(header.getText()));
-					layout.getChildren().remove(progressBar);
-				});
-				return;
 			}
-
-			Platform.runLater(() -> {
-				if (!isCurrentOccurrenceSearch(state, occurrenceTab, worker))
-					return;
+			return occurrences;
+		}, (job, event) -> {
+			if (!isCurrentOccurrenceSearch(state, occurrenceTab, job))
+				return;
+			switch (event.state()) {
+			case QUEUED -> header.setText("Search queued...");
+			case RUNNING -> header.setText("Searching for occurrences...");
+			case CANCELLED, FAILED, REJECTED -> {
+				occurrenceTab.getProperties().remove("searchJob");
+				occurrenceTab.setText("Search " + event.state().name().toLowerCase(Locale.ROOT) + ": "
+						+ workerRule.getPattern());
+				String message = switch (event.state()) {
+				case CANCELLED -> "Search cancelled; no results published.";
+				case REJECTED -> "Scan capacity reached; click the highlight to try again.";
+				default -> "Search incomplete; no results published. " + event.error().getMessage();
+				};
+				header.setText(message);
+				header.setWrapText(true);
+				header.setTooltip(new Tooltip(message));
+				layout.getChildren().removeAll(progressBar, cancel);
+			}
+			case SUCCEEDED -> {
+				occurrenceTab.getProperties().remove("searchJob");
+				layout.getChildren().remove(cancel);
 				if (state.logItems.snapshot().generation() != snapshot.generation()) {
 					header.setText("File changed during search. Click the highlight to search again.");
 					layout.getChildren().remove(progressBar);
 					return;
 				}
+				List<LogLine> occurrences = event.result();
 				progressBar.setProgress(1.0);
 				if (occurrences.isEmpty()) {
 					ruleTabMap.remove(rule);
@@ -1060,47 +1098,54 @@ public class MainController {
 				configureRowHeight(listView);
 				listView.setCellFactory(getHighlightingCellCallback(rule));
 				setupCopyContextMenu(listView);
-				listView.setOnMouseClicked(event -> {
-					if (event.getClickCount() == 2) {
-						if (state.closed || state.logItems.snapshot().generation() != snapshot.generation())
-							return;
-						LogLine selected = listView.getSelectionModel().getSelectedItem();
-						if (selected != null) {
-							// If the current tab is not for the same file, then the tab should switch
-							for (Tab tab : tabPane.getTabs()) {
-								if (tab.getUserData() == state) {
-									tabPane.getSelectionModel().select(tab);
-									break;
-								}
-							}
-
-							int index = selected.lineNumber() - 1;
-							if (index < 0 || index >= state.logItems.size())
-								return;
-							state.logListView.followingProperty().set(false);
-							state.logListView.getSelectionModel().select(index);
-							state.logListView.scrollTo(index);
-						}
-					}
-				});
+				listView.setOnMouseClicked(occurrenceNavigation(state, snapshot, listView));
 
 				VBox.setVgrow(listView, Priority.ALWAYS);
 				layout.getChildren().remove(progressBar);
 				layout.getChildren().add(listView);
-			});
-		}, "OccurrenceSearch");
-		search.setDaemon(true);
-		occurrenceTab.getProperties().put("searchThread", search);
-		search.start();
+			}
+			}
+		});
+		occurrenceTab.getProperties().put("searchJob", search);
+	}
+
+	private javafx.event.EventHandler<MouseEvent> occurrenceNavigation(TabState state,
+			LogFileModel.Snapshot snapshot, LogListView listView) {
+		return event -> {
+			if (event.getClickCount() != 2 || state.closed
+					|| state.logItems.snapshot().generation() != snapshot.generation())
+				return;
+			LogLine selected = listView.getSelectionModel().getSelectedItem();
+			if (selected == null)
+				return;
+			for (Tab tab : tabPane.getTabs()) {
+				if (tab.getUserData() == state) {
+					tabPane.getSelectionModel().select(tab);
+					break;
+				}
+			}
+			int index = selected.lineNumber() - 1;
+			if (index < 0 || index >= state.logItems.size())
+				return;
+			state.logListView.followingProperty().set(false);
+			state.logListView.getSelectionModel().select(index);
+			state.logListView.scrollTo(index);
+		};
 	}
 
 	private void cancelOccurrenceSearch(Tab tab) {
-		if (tab.getProperties().remove("searchThread") instanceof Thread thread)
-			thread.interrupt();
+		tab.getProperties().remove("searchJob");
+		scanService.cancel(tab);
+		if (tab.getContent() instanceof VBox box) {
+			for (Node node : box.getChildren()) {
+				if (node instanceof LogListView list)
+					list.dispose();
+			}
+		}
 	}
 
-	private boolean isCurrentOccurrenceSearch(TabState state, Tab tab, Thread worker) {
-		return !state.closed && tab.getProperties().get("searchThread") == worker
+	private boolean isCurrentOccurrenceSearch(TabState state, Tab tab, ScanService.Job<?> job) {
+		return !disposed && !state.closed && job.isCurrent() && tab.getProperties().get("searchJob") == job
 				&& occurrencesTabPane.getTabs().contains(tab);
 	}
 
@@ -1372,14 +1417,29 @@ public class MainController {
 		}
 
 		saveHighlights();
-		for (Tab tab : tabPane.getTabs()) {
-			TabState state = (TabState) tab.getUserData();
-			if (state != null) {
-				state.stopTailing();
-			}
-		}
+		dispose();
 		Platform.exit();
 		return true;
+	}
+
+	public void dispose() {
+		if (disposed)
+			return;
+		disposed = true;
+		highlightsDelay.stop();
+		cancelHighlightCount();
+		if (tabPane != null) {
+			for (Tab tab : tabPane.getTabs()) {
+				if (tab.getUserData() instanceof TabState state)
+					state.stopTailing();
+			}
+		}
+		if (occurrencesTabPane != null) {
+			for (Tab tab : occurrencesTabPane.getTabs())
+				cancelOccurrenceSearch(tab);
+		}
+		openOccurrenceTabs.clear();
+		scanService.close();
 	}
 
 	private String toWebColor(Color color) {
