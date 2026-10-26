@@ -1,4 +1,4 @@
-package ch.eitchnet.luminelog.probes;/*
+/*
  * Copyright (c) 2026 Robert von Burg <eitch@eitchnet.ch>
  *
  * This program is free software: you can redistribute it and/or modify

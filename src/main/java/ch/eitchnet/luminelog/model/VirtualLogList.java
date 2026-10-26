@@ -26,23 +26,36 @@ import java.util.Map;
 
 public class VirtualLogList extends ObservableListBase<LogLine> {
 
+	public static final long DEFAULT_CACHE_BYTES = 8 * 1024 * 1024;
+	public static final int DEFAULT_CACHE_ENTRIES = 1000;
+	private static final long ENTRY_OVERHEAD_BYTES = 192;
+	private static final long STRING_OVERHEAD_BYTES = 64;
+	private static final long BATCH_OVERHEAD_BYTES = 128;
+	private static final int REFERENCE_BYTES = 8;
+
 	private final LogFileModel logModel;
 	private final Thread owner = Thread.currentThread();
 	private LogFileModel.Snapshot snapshot;
 	private final Map<Integer, LogLine> cache;
-	private static final int CACHE_SIZE = 1000;
+	private final long byteBudget;
+	private final int entryLimit;
+	private long cachedBytes;
+	private long batchBytes;
 
 	private LogFileModel.Batch currentBatch;
 
 	public VirtualLogList(LogFileModel logModel) {
+		this(logModel, DEFAULT_CACHE_BYTES, DEFAULT_CACHE_ENTRIES);
+	}
+
+	VirtualLogList(LogFileModel logModel, long byteBudget, int entryLimit) {
+		if (byteBudget < 0 || entryLimit < 1)
+			throw new IllegalArgumentException("Cache budget must be nonnegative and entry limit positive");
 		this.logModel = logModel;
 		this.snapshot = logModel.snapshot();
-		this.cache = new LinkedHashMap<>(CACHE_SIZE, 0.75f, true) {
-			@Override
-			protected boolean removeEldestEntry(Map.Entry<Integer, LogLine> eldest) {
-				return size() > CACHE_SIZE;
-			}
-		};
+		this.byteBudget = byteBudget;
+		this.entryLimit = entryLimit;
+		this.cache = new LinkedHashMap<>(16, 0.75f, true);
 	}
 
 	@Override
@@ -54,24 +67,91 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 		if (cached != null)
 			return cached;
 
-		if (currentBatch == null || index < currentBatch.startLine() || index >= currentBatch.endLine()) {
+		LogFileModel.Batch batch = currentBatch;
+		if (batch == null || index < batch.startLine() || index >= batch.endLine()) {
+			currentBatch = null;
+			batchBytes = 0;
 			try {
-				currentBatch = snapshot.readBatch(index);
+				batch = snapshot.readBatch(index);
 			} catch (IOException e) {
 				LogLine error = LogLine.readError(index + 1, e.getMessage());
 				if (e instanceof LogFileModel.OversizedLineException)
-					cache.put(index, error);
+					cacheLine(index, error);
 				return error;
+			}
+			long weight = batchWeight(batch);
+			if (weight <= byteBudget) {
+				currentBatch = batch;
+				batchBytes = weight;
+				trimCache();
+			}
+			List<String> lines = batch.getLines();
+			for (int i = 0; i < lines.size(); i++) {
+				int lineIndex = batch.startLine() + i;
+				if (lineIndex != index && !cache.containsKey(lineIndex))
+					cacheLine(lineIndex, new LogLine(lineIndex + 1, lines.get(i)));
 			}
 		}
 
-		List<String> lines = currentBatch.getLines();
-		for (int i = 0; i < lines.size(); i++) {
-			int lineIndex = currentBatch.startLine() + i;
-			cache.putIfAbsent(lineIndex, new LogLine(lineIndex + 1, lines.get(i)));
-		}
+		LogLine result = new LogLine(index + 1, batch.getLines().get(index - batch.startLine()));
+		cacheLine(index, result);
+		return result;
+	}
 
-		return cache.get(index);
+	private void cacheLine(int index, LogLine line) {
+		long weight = lineWeight(line);
+		if (weight > byteBudget - batchBytes)
+			return;
+		removeCachedLine(index);
+		cache.put(index, line);
+		cachedBytes += weight;
+		trimCache();
+	}
+
+	private void removeCachedLine(int index) {
+		LogLine removed = cache.remove(index);
+		if (removed != null)
+			cachedBytes -= lineWeight(removed);
+	}
+
+	private void trimCache() {
+		var entries = cache.entrySet().iterator();
+		while (cache.size() > entryLimit || cachedBytes > byteBudget - batchBytes) {
+			cachedBytes -= lineWeight(entries.next().getValue());
+			entries.remove();
+		}
+	}
+
+	// Deliberately charge shared strings twice; these are conservative weights, not measured heap sizes.
+	static long lineWeight(LogLine line) {
+		return ENTRY_OVERHEAD_BYTES + stringWeight(line.content())
+				+ (line.errorMessage() == null ? 0 : stringWeight(line.errorMessage()));
+	}
+
+	private static long stringWeight(String value) {
+		return STRING_OVERHEAD_BYTES + aligned(2L * value.length());
+	}
+
+	private static long aligned(long bytes) {
+		return (bytes + 7) & ~7L;
+	}
+
+	static long batchWeight(LogFileModel.Batch batch) {
+		long weight = BATCH_OVERHEAD_BYTES + aligned(batch.totalBytesToRead())
+				+ (long) REFERENCE_BYTES * batch.getLines().size();
+		for (String line : batch.getLines())
+			weight += stringWeight(line);
+		return weight;
+	}
+
+	CacheUsage cacheUsage() {
+		return new CacheUsage(cachedBytes, batchBytes, cache.size());
+	}
+
+	record CacheUsage(long cachedBytes, long batchBytes, int entries) {
+		long totalBytes() {
+			return cachedBytes + batchBytes;
+		}
 	}
 
 	@Override
@@ -98,10 +178,12 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 		Map<Integer, LogLine> removedCache = reset ? new LinkedHashMap<>(cache) : Map.of();
 		snapshot = update;
 		currentBatch = null;
+		batchBytes = 0;
 		beginChange();
 		try {
 			if (reset) {
 				cache.clear();
+				cachedBytes = 0;
 				List<LogLine> removed = new AbstractList<>() {
 					@Override
 					public int size() {
@@ -124,7 +206,7 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 				nextReplace(0, size(), removed);
 			} else {
 				if (oldSize > 0) {
-					cache.remove(oldSize - 1);
+					removeCachedLine(oldSize - 1);
 					nextUpdate(oldSize - 1);
 				}
 				if (size() > oldSize)

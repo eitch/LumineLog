@@ -117,6 +117,46 @@ java -Xms128m -Xmx128m -XX:+UseSerialGC -XX:-DoEscapeAnalysis -cp target/classes
   src/test/probes/BatchAllocationProbe.java
 ```
 
+#### Weighted decoded cache (B03)
+
+Each `VirtualLogList` now has a combined **8 MiB accounted-data budget** for its decoded LRU
+and retained current batch, plus the existing **1,000 cached-row ceiling**. Both defaults are
+named constants (`DEFAULT_CACHE_BYTES`, `DEFAULT_CACHE_ENTRIES`). Eviction follows access order;
+the requested row is admitted last so batch preloading cannot evict it before it is returned.
+A row or batch that exceeds the available budget is still read completely within B01's limits
+and returned, but is not retained. This can mean repeated reads under a small budget; it never
+means shortened content or a missing row. Publication releases the batch and removes the old
+final row's weight; replacement resets cache accounting.
+
+Accounting deliberately overestimates shared/compact text: a string costs 64 bytes plus its
+UTF-16 length times two, rounded up to eight bytes. Each cached row adds 192 bytes for the row,
+key, map entry and amortized table overhead; error messages are charged as strings too. A batch
+adds 128 bytes, its aligned raw payload, eight bytes per line reference, and all decoded string
+weights. Text shared between a batch and cache is charged twice, avoiding fragile identity-based
+accounting. These are conservative estimates, **not exact JVM heap sizes**.
+
+The budget is per list, not global: tabs multiply it. Fixed list/map objects, indexes and retained
+snapshots, listener-held removed-item lists, read/decode temporaries, rendered/selected rows,
+concurrent scans and occurrence results are outside this accounting. During reset notification,
+the removed-items wrapper can retain the prior cache as well as the new cache; listeners may
+retain it longer. Cache-miss reads remain synchronous until B05.
+
+Comparable retained-data counter evidence on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35,
+with `-Xms128m -Xmx128m -XX:+UseSerialGC` (reported max heap 134,152,192 bytes): two lists sharing
+one model sequentially read a 12,583,056-byte UTF-8 fixture containing 24 half-MiB ASCII lines
+interleaved with 24 short lines and a final empty row. Using the same accounting formula before
+and after B03, combined peak retained-data weight fell from **53,503,968 to 15,736,768 bytes**
+(26,751,984 to 7,868,384 per list), including both retained batches. The shared model had 49
+offsets (392 logical offset bytes, excluding index chunk/directory overhead), one current
+snapshot, no historical snapshots, pending tasks, scans or occurrence results. Read temporaries
+were excluded. This is not a heap profile or a throughput claim. Reproduce after `mvn test`:
+
+```bash
+mvn -q dependency:build-classpath -Dmdep.outputFile=target/cache-probe-classpath.txt
+java -Xms128m -Xmx128m -XX:+UseSerialGC \
+  -cp "target/classes:$(<target/cache-probe-classpath.txt)" src/test/probes/WeightedCacheProbe.java
+```
+
 ### Building a package
 
 ```bash
