@@ -36,6 +36,68 @@ import static org.junit.jupiter.api.Assertions.*;
 class ScanServiceTest {
 
 	@Test
+	void closesUndeliveredOwnedResultsOnCancellationAndShutdown() throws Exception {
+		for (boolean shutdown : new boolean[] {false, true}) {
+			ManualExecutor callbacks = new ManualExecutor();
+			AtomicInteger closes = new AtomicInteger();
+			try (ScanService service = new ScanService(callbacks)) {
+				ScanService.Job<AutoCloseable> job = service.submit("resource", _ -> closes::incrementAndGet,
+						(_, event) -> assertNull(event.result(), "Cancelled results must not be delivered"));
+				callbacks.awaitSize(3);
+				if (shutdown)
+					service.close();
+				else
+					job.cancel();
+				assertEquals(1, closes.get(), "An owned result must be disposed before queued delivery");
+				callbacks.runAll();
+				assertEquals(1, closes.get());
+			}
+		}
+	}
+
+	@Test
+	void closesLateResultFromCancelledNoncooperativeWork() throws Exception {
+		ManualExecutor callbacks = new ManualExecutor();
+		CountDownLatch started = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		CountDownLatch disposed = new CountDownLatch(1);
+		try (ScanService service = new ScanService(callbacks)) {
+			service.<AutoCloseable>submit("late", _ -> {
+				started.countDown();
+				awaitIgnoringInterrupts(release, new CountDownLatch(1));
+				return disposed::countDown;
+			}, (_, _) -> fail("Shutdown must suppress callbacks"));
+			await(started);
+			service.close();
+			release.countDown();
+			await(disposed);
+			callbacks.runAll();
+		} finally {
+			release.countDown();
+		}
+	}
+
+	@Test
+	void successfulDeliveryTransfersResourceOwnershipToListener() throws Exception {
+		ManualExecutor callbacks = new ManualExecutor();
+		AtomicInteger closes = new AtomicInteger();
+		AtomicReference<AutoCloseable> delivered = new AtomicReference<>();
+		try (ScanService service = new ScanService(callbacks)) {
+			service.<AutoCloseable>submit("owned", _ -> closes::incrementAndGet, (_, event) -> {
+				if (event.state() == SUCCEEDED)
+					delivered.set(event.result());
+			});
+			callbacks.awaitSize(3);
+			callbacks.runAll();
+			service.close();
+			assertEquals(0, closes.get());
+			assertNotNull(delivered.get());
+			delivered.get().close();
+			assertEquals(1, closes.get());
+		}
+	}
+
+	@Test
 	void deliversStatesOnCallbackExecutorAndReleasesTerminalKey() throws Exception {
 		ManualExecutor callbacks = new ManualExecutor();
 		List<ScanService.Event<String>> events = new ArrayList<>();

@@ -22,7 +22,7 @@ public interface OccurrenceIndex extends AutoCloseable {
 	/** Returns the number of occurrences, or zero after close. */
 	int size();
 
-	/** Returns an original line identifier; throws if closed or the result index is out of bounds. */
+	/** Returns an original identifier; disk-backed implementations may block. Use pages on the FX thread. */
 	int lineIndex(int resultIndex);
 
 	/** Returns the first result position whose line identifier is at least the argument, or size(). */
@@ -31,7 +31,7 @@ public interface OccurrenceIndex extends AutoCloseable {
 	/** Retained primitive array payload bytes, excluding JVM headers and references; zero after close. */
 	long accountedBytes();
 
-	/** Releases owned arrays. Idempotent; subsequent lookups throw IllegalStateException. */
+	/** Releases owned arrays/files. Idempotent; subsequent lookups throw IllegalStateException. */
 	@Override
 	void close();
 }

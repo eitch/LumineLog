@@ -27,7 +27,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Bounded, keyed background work with delivery-time protection against stale callbacks. */
+/** Bounded, keyed work. AutoCloseable results transfer to the successful listener, or are closed. */
 public final class ScanService implements AutoCloseable {
 
 	public static final int DEFAULT_WORKERS = 2;
@@ -138,6 +138,7 @@ public final class ScanService implements AutoCloseable {
 		}
 		job.generation++;
 		job.state = State.CANCELLED;
+		discard(job);
 		job.work = null;
 		executor.remove(job.task);
 		if (job.runner != null) {
@@ -176,8 +177,11 @@ public final class ScanService implements AutoCloseable {
 			synchronized (lock) {
 				job.runner = null;
 				if (job.state == State.RUNNING && isCurrent(job)) {
+					job.ownedResult = result;
 					job.state = error == null ? State.SUCCEEDED : State.FAILED;
 					notifyListener(job, new Event<>(job.state, result, error));
+				} else {
+					closeResult(result);
 				}
 			}
 		}
@@ -192,6 +196,8 @@ public final class ScanService implements AutoCloseable {
 						return;
 					}
 					try {
+						if (event.state() == State.SUCCEEDED)
+							job.ownedResult = null;
 						job.listener.changed(job, event);
 					} finally {
 						if (terminal(event.state()) && job.generation == generation) {
@@ -213,12 +219,30 @@ public final class ScanService implements AutoCloseable {
 	}
 
 	private void release(Job<?> job) {
+		discard(job);
 		if (isCurrent(job)) {
 			current.remove(job.key);
 		}
 		job.key = null;
 		job.work = null;
 		job.listener = null;
+	}
+
+	private void discard(Job<?> job) {
+		Object result = job.ownedResult;
+		job.ownedResult = null;
+		closeResult(result);
+	}
+
+	private void closeResult(Object result) {
+		if (result instanceof AutoCloseable resource) {
+			try {
+				resource.close();
+			} catch (Exception e) {
+				System.getLogger(ScanService.class.getName()).log(System.Logger.Level.ERROR,
+						"Could not dispose abandoned scan result", e);
+			}
+		}
 	}
 
 	public enum State {
@@ -247,6 +271,7 @@ public final class ScanService implements AutoCloseable {
 		private State state = State.QUEUED;
 		private long generation;
 		private Thread runner;
+		private Object ownedResult;
 
 		private Job(ScanService service, Object key, Work<T> work, Listener<T> listener) {
 			this.service = service;

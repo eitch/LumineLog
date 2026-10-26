@@ -312,8 +312,8 @@ the result index and cache and suppress pending completions. Failed/cancelled se
 partial index. Scan decoding still allocates transient batches, but matching text is not retained by
 the result store.
 
-Identifier payload remains **4 bytes per match**, plus chunk/directory/object overhead: memory is
-still proportional to match count until B08 introduces spillable storage. The existing `ListView` and
+The original B07 index uses **4 bytes per match**, plus chunk/directory/object overhead; searches now
+use B08's spillable store below instead of retaining an unbounded chunk directory. The existing `ListView` and
 model integer line-count ceiling remains. Multiple result tabs each own a cache and an identifier
 index; in-flight reads, model indexes, snapshots, selection/rendering, and scan temporaries remain
 outside any one cache's accounted budget. This is not a global heap bound.
@@ -332,6 +332,53 @@ caches. Reproduce after `mvn test` (requires JDK thread-allocation counters):
 java -Xms512m -Xmx512m -XX:+UseSerialGC -XX:-DoEscapeAnalysis -cp target/classes \
   src/test/probes/OccurrenceIndexProbe.java
 ```
+
+#### Spillable occurrence identifiers (B08)
+
+Searches use `SpillableOccurrenceIndex`: up to **65,536 identifiers (256 KiB primitive payload)**
+stay in memory. Beyond that threshold the builder streams identifiers, not log text, into owned
+temporary storage. Its buffer and final store have no growing per-page directory. Searches still
+publish only complete results: disk-full/write failures show an incomplete-search error, never a
+silently shortened match count. The `ListView`/model ceiling remains **2,147,483,647 lines/results**;
+spilling does not remove it or bound the source offset index.
+
+Spilled result tabs cache at most **4 pages of 4,096 integers (64 KiB primitive payload)**.
+`OccurrencePageService` reads pages off the FX thread with **2 workers and 16 queue slots**,
+independent of source-text loading and scans. Admission includes completed pages awaiting delivery,
+and one coalesced dispatcher bounds pending callbacks. Each tab requests at most **2 identifier pages**
+at once. Rendering and selection inspect cached identifiers only; unloaded identifiers use a separate,
+nonselectable loading state, followed by normal lazy text loading. Page errors remain explicit and
+retryable without changing the result count. Original line numbers, copy/navigation and captured
+snapshot boundaries are preserved. Identifier pages are not prefetched.
+
+Refresh, cancellation, result/source-tab close and normal shutdown release owned storage, including
+completed results cancelled before publication. Safe abandoned-file cleanup runs during spill setup;
+active ownership locks protect other running instances, and foreign/unrecognized files are left alone.
+Cleanup failures are reported/logged, not treated as successful deletion. Storage grows by approximately
+**4 disk bytes per match**, subject to free space; it is not a disk quota. Cancellation remains
+cooperative for blocked filesystem calls. Per-tab text caches, in-flight page/read buffers, source
+indexes, snapshots, rendering and selections remain additional memory: these payload budgets are not
+exact JVM heap measurements or a global application memory bound.
+
+Constrained-heap evidence: Azul OpenJDK **27+35**, Linux **7.2.11-arch1-1 amd64**, `-Xmx32m`
+(33,554,432-byte maximum heap), **10,000,000 generated ascending identifiers**. The B07 chunked
+store exhausted heap during accumulation. B08 completed and verified every identifier, retained
+**zero primitive payload bytes in the final disk-backed index**, wrote **40,000,000 filesystem bytes**,
+and deleted its owned directory on close. The threshold buffer (up to 256 KiB), read buffers and
+visible-page caches are additional; zero here does not mean zero heap usage. Temporary storage was
+Linux `/tmp` on **tmpfs**: filesystem contents consume memory outside the Java heap, so this run is
+not evidence of bounded total machine memory or physical-disk throughput. Use disk-backed temporary
+storage when large spills must not occupy tmpfs RAM. Reproduce after `mvn test`:
+
+```bash
+javac -cp target/classes -d target/probes src/test/probes/SpillableOccurrenceIndexProbe.java
+java -Xmx32m -cp target/classes:target/probes SpillableOccurrenceIndexProbe spill 10000000
+# Expected baseline outcome: OutOfMemoryError in the original chunked builder.
+java -Xmx32m -cp target/classes:target/probes SpillableOccurrenceIndexProbe chunked 10000000
+```
+
+Set `-Djava.io.tmpdir=/path/to/disk-backed-temp` on the application/probe JVM to choose a different
+temporary filesystem. Safe cleanup only examines LumineLog-owned spill directories under that root.
 
 ### Building a package
 

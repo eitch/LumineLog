@@ -21,6 +21,7 @@ import ch.eitchnet.luminelog.model.*;
 import ch.eitchnet.luminelog.service.FileOpenService;
 import ch.eitchnet.luminelog.service.ScanService;
 import ch.eitchnet.luminelog.service.LineLoadingService;
+import ch.eitchnet.luminelog.service.OccurrencePageService;
 import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -70,6 +71,7 @@ public class MainController {
 	private final ScanService scanService;
 	private final FileOpenService fileOpenService;
 	private final LineLoadingService lineLoadingService = new LineLoadingService(Platform::runLater);
+	private final OccurrencePageService occurrencePageService = new OccurrencePageService(Platform::runLater);
 	private final Object highlightCountKey = new Object();
 	private boolean disposed;
 
@@ -1096,23 +1098,27 @@ public class MainController {
 		HighlightRule workerRule = new HighlightRule(rule.getPattern(), rule.getColor(), rule.isIsRegex());
 		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
 		ScanService.Job<OccurrenceIndex> search = scanService.<OccurrenceIndex>submit(occurrenceTab, job -> {
-			ChunkedOccurrenceIndex.Builder occurrences = new ChunkedOccurrenceIndex.Builder();
-			int index = 0;
-			while (index < snapshot.lineCount()) {
-				if (job.isCancelled() || state.closed)
-					return null;
-				for (String line : snapshot.readBatch(index).getLines()) {
+			try (var occurrences = new SpillableOccurrenceIndex.Builder()) {
+				int index = 0;
+				while (index < snapshot.lineCount()) {
 					if (job.isCancelled() || state.closed)
 						return null;
-					if (workerRule.matches(line))
-						occurrences.add(index);
-					index++;
+					for (String line : snapshot.readBatch(index).getLines()) {
+						if (job.isCancelled() || state.closed)
+							return null;
+						if (workerRule.matches(line))
+							occurrences.add(index);
+						index++;
+					}
 				}
+				return occurrences.build();
 			}
-			return occurrences.build();
 		}, (job, event) -> {
-			if (!isCurrentOccurrenceSearch(state, occurrenceTab, job))
+			if (!isCurrentOccurrenceSearch(state, occurrenceTab, job)) {
+				if (event.result() != null)
+					event.result().close();
 				return;
+			}
 			switch (event.state()) {
 			case QUEUED -> header.setText("Search queued...");
 			case RUNNING -> header.setText("Searching for occurrences...");
@@ -1159,7 +1165,7 @@ public class MainController {
 				header.setText("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
 
 				OccurrenceLogList observableOccurrences = new OccurrenceLogList(state.logModel, state.logItems,
-						snapshot, occurrences, lineLoadingService);
+						snapshot, occurrences, lineLoadingService, occurrencePageService);
 
 				LogListView listView = new LogListView();
 				listView.followingProperty().set(false);
@@ -1208,7 +1214,13 @@ public class MainController {
 				if (node instanceof LogListView list) {
 					if (list.getItems() instanceof OccurrenceLogList results) {
 						list.setItems(FXCollections.emptyObservableList());
-						results.close();
+						try {
+							results.close();
+						} catch (java.io.UncheckedIOException e) {
+							logger.error("Could not delete occurrence spill storage", e);
+							if (box.getChildren().getFirst() instanceof Label header)
+								header.setText("Could not delete occurrence storage: " + e.getMessage());
+						}
 					}
 					list.dispose();
 				}
@@ -1351,13 +1363,15 @@ public class MainController {
 		if (!empty && item != null) {
 			if (item.isLoading()) {
 				listCell.setGraphic(null);
-				listCell.setText("Loading line " + item.lineNumber() + "…");
+				listCell.setText(item.lineNumber() == 0 ? "Loading occurrence identifiers…"
+						: "Loading line " + item.lineNumber() + "…");
 				listCell.setStyle("-fx-text-fill: gray; -fx-font-family: 'monospace';");
 				return true;
 			}
 			if (item.isReadError()) {
 				listCell.setGraphic(null);
-				listCell.setText("Line " + item.lineNumber() + " unavailable: " + item.errorMessage());
+				listCell.setText((item.lineNumber() == 0 ? "Occurrence unavailable: "
+						: "Line " + item.lineNumber() + " unavailable: ") + item.errorMessage());
 				listCell.setTooltip(new Tooltip(listCell.getText()));
 				listCell.setStyle("-fx-text-fill: firebrick; -fx-font-family: 'monospace';");
 				return true;
@@ -1525,6 +1539,7 @@ public class MainController {
 		fileOpenService.close();
 		scanService.close();
 		lineLoadingService.close();
+		occurrencePageService.close();
 	}
 
 	private String toWebColor(Color color) {

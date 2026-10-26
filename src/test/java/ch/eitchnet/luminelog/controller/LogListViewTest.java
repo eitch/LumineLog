@@ -642,6 +642,53 @@ class LogListViewTest {
 	}
 
 	@Test
+	void spilledResultsPreserveCopyNavigationAndDeleteFilesOnRefreshCloseAndShutdown() throws Exception {
+		Path file = tempDir.resolve("spilled-results.log");
+		Files.writeString(file, "skip\nERROR match\n".repeat(70000));
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			Path[] storage = new Path[1];
+			for (int lifecycle = 0; lifecycle < 3; lifecycle++) {
+				fx(() -> search(ui));
+				workerFence(service);
+				fx(() -> drain(callbacks));
+				awaitUi(() -> occurrenceView(ui).getItems().get(69999).isAvailable());
+				fx(() -> {
+					var result = occurrenceView(ui);
+					try {
+						var field = OccurrenceLogList.class.getDeclaredField("index");
+						field.setAccessible(true);
+						var index = (ch.eitchnet.luminelog.model.SpillableOccurrenceIndex) field.get(result.getItems());
+						assertTrue(index.isSpilled());
+						storage[0] = index.storagePath();
+					} catch (ReflectiveOperationException e) {
+						throw new AssertionError(e);
+					}
+					assertTrue(Files.exists(storage[0]));
+					assertEquals(70000, result.getItems().size());
+					assertEquals(new LogLine(140000, "ERROR match"), result.getItems().get(69999));
+					result.getSelectionModel().clearAndSelect(69999);
+					assertEquals("ERROR match", MainController.selectedText(result.getSelectionModel().getSelectedItems()));
+					result.getOnMouseClicked().handle(new MouseEvent(MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0,
+							MouseButton.PRIMARY, 2, false, false, false, false, false, false, false, false, false, false, null));
+				});
+				awaitUi(() -> view.getSelectionModel().getSelectedIndex() == 139999);
+				int action = lifecycle;
+				fx(() -> {
+					if (action == 0)
+						search(ui);
+					else if (action == 1)
+						ui.occurrences().getTabs().clear();
+					else
+						ui.controller().dispose();
+					assertFalse(Files.exists(storage[0]), "Owned spill must be deleted at its lifecycle boundary");
+				});
+			}
+		}
+	}
+
+	@Test
 	void rewrittenOccurrenceRowsCannotBeCopiedOrNavigated() throws Exception {
 		Path file = tempDir.resolve("invalid-result.log");
 		Files.writeString(file, "skip\nERROR old");
