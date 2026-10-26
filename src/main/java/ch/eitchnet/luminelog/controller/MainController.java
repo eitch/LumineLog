@@ -762,6 +762,8 @@ public class MainController {
 		retryItem.setOnAction(_ -> {
 			if (listView.getItems() instanceof VirtualLogList items)
 				items.retryUnavailable();
+			else if (listView.getItems() instanceof OccurrenceLogList results)
+				results.retryUnavailable();
 		});
 		contextMenu.getItems().add(retryItem);
 
@@ -1093,8 +1095,8 @@ public class MainController {
 		layout.getChildren().add(cancel);
 		HighlightRule workerRule = new HighlightRule(rule.getPattern(), rule.getColor(), rule.isIsRegex());
 		LogFileModel.Snapshot snapshot = state.logItems.snapshot();
-		ScanService.Job<List<LogLine>> search = scanService.<List<LogLine>>submit(occurrenceTab, job -> {
-			List<LogLine> occurrences = new ArrayList<>();
+		ScanService.Job<OccurrenceIndex> search = scanService.<OccurrenceIndex>submit(occurrenceTab, job -> {
+			ChunkedOccurrenceIndex.Builder occurrences = new ChunkedOccurrenceIndex.Builder();
 			int index = 0;
 			while (index < snapshot.lineCount()) {
 				if (job.isCancelled() || state.closed)
@@ -1103,11 +1105,11 @@ public class MainController {
 					if (job.isCancelled() || state.closed)
 						return null;
 					if (workerRule.matches(line))
-						occurrences.add(new LogLine(index + 1, line));
+						occurrences.add(index);
 					index++;
 				}
 			}
-			return occurrences;
+			return occurrences.build();
 		}, (job, event) -> {
 			if (!isCurrentOccurrenceSearch(state, occurrenceTab, job))
 				return;
@@ -1132,13 +1134,15 @@ public class MainController {
 				occurrenceTab.getProperties().remove("searchJob");
 				layout.getChildren().remove(cancel);
 				if (state.logItems.snapshot().generation() != snapshot.generation()) {
+					event.result().close();
 					header.setText("File changed during search. Click the highlight to search again.");
 					layout.getChildren().remove(progressBar);
 					return;
 				}
-				List<LogLine> occurrences = event.result();
+				OccurrenceIndex occurrences = event.result();
 				progressBar.setProgress(1.0);
-				if (occurrences.isEmpty()) {
+				if (occurrences.size() == 0) {
+					occurrences.close();
 					ruleTabMap.remove(rule);
 					if (ruleTabMap.isEmpty())
 						openOccurrenceTabs.remove(state);
@@ -1154,8 +1158,8 @@ public class MainController {
 				occurrenceTab.setText(rule.getPattern() + " (" + state.file.getName() + ")");
 				header.setText("Found " + occurrences.size() + " occurrences. Double-click to jump to line.");
 
-				javafx.collections.ObservableList<LogLine> observableOccurrences = FXCollections.observableArrayList(
-						occurrences);
+				OccurrenceLogList observableOccurrences = new OccurrenceLogList(state.logModel, state.logItems,
+						snapshot, occurrences, lineLoadingService);
 
 				LogListView listView = new LogListView();
 				listView.followingProperty().set(false);
@@ -1181,7 +1185,7 @@ public class MainController {
 					|| state.logItems.snapshot().generation() != snapshot.generation())
 				return;
 			LogLine selected = listView.getSelectionModel().getSelectedItem();
-			if (selected == null)
+			if (selected == null || !selected.isAvailable())
 				return;
 			for (Tab tab : tabPane.getTabs()) {
 				if (tab.getUserData() == state) {
@@ -1201,8 +1205,13 @@ public class MainController {
 		scanService.cancel(tab);
 		if (tab.getContent() instanceof VBox box) {
 			for (Node node : box.getChildren()) {
-				if (node instanceof LogListView list)
+				if (node instanceof LogListView list) {
+					if (list.getItems() instanceof OccurrenceLogList results) {
+						list.setItems(FXCollections.emptyObservableList());
+						results.close();
+					}
 					list.dispose();
+				}
 			}
 		}
 	}

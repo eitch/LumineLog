@@ -67,8 +67,9 @@ Index snapshots preserve offsets and read boundaries, not historical file conten
 is replaced or overwritten before a pending read, that read may fail and the next update reloads
 the view. Change detection uses file identity, timestamps, size, and a bounded tail sample;
 rewrites preserving all of these can evade detection. Initial indexing runs on bounded background
-workers while the tab shows its opening state. Occurrence results are held in memory, and expensive regular expressions can remain
-costly on very long lines.
+workers while the tab shows its opening state. Occurrence identifiers remain memory-backed, but matching
+text is loaded lazily into bounded per-result caches. Expensive regular expressions can remain costly
+on very long lines.
 
 #### Oversized-line safety (B01)
 
@@ -208,6 +209,11 @@ batch** (up to B01's 1 MiB/1,000-row limits); prefetch never chains. Saturated d
 on the FX thread after **100 ms** (`RETRY_DELAY_MILLIS`) without performing reads there.
 
 Loading and unavailable rows are nonselectable presentation states, not searchable/copyable text.
+Range selection checks only already-loaded content in both source and occurrence tabs; it does not
+request offscreen rows or cancel viewport reads. Speculative prefetch uses spare cache capacity only,
+without evicting demand-loaded rows or replacing their retained batch. A visible request for a pending
+prefetch promotes it to demand work. Regression tests cover large selections without new read jobs
+and preservation of loaded visible cells across selection/layout and adjacent prefetch completion.
 Failed reads show their error; use **Retry unavailable lines** in the context menu to retry.
 Occurrence navigation selects its target only once loaded, unless superseded by navigation or
 a file reset. Cache admission, list updates, and rendering remain on the owning FX thread.
@@ -273,6 +279,58 @@ The probe cleans up its fixture/recordings under `target`. Reproduce after `mvn 
 mvn -q dependency:build-classpath -Dmdep.outputFile=target/file-open-probe-classpath.txt
 java -Xms128m -Xmx128m \
   -cp "target/classes:$(<target/file-open-probe-classpath.txt)" src/test/probes/AsyncFileOpenProbe.java
+```
+
+#### Identifier-backed occurrence results (B07)
+
+Occurrence scans retain **zero-based original line identifiers**, not matching `LogLine` objects or
+their text. `ChunkedOccurrenceIndex` stores primitive integers in **4,096-entry chunks**. Completed
+chunks transfer from a single-use builder; only the final partial chunk is trimmed. Publication
+attaches the immutable index on the FX thread without copying one reference per match. Counts and
+original line numbers remain exact, including captured empty/final rows; appends do not extend an
+existing result set or its captured final-line text.
+
+Each result tab lazily reads its captured snapshot through the shared bounded `LineLoadingService`,
+using the same **8 MiB accounted cache / 1,000-entry ceiling** as a file view. Loading/error rows are
+nonselectable, cannot be copied, and cannot navigate. Once loaded, whole-line selection/copy and
+double-click navigation use the original line numbers. Copying a selection that includes an unloaded
+or unavailable row fails explicitly rather than omitting it. The context-menu retry action retries
+read failures, but an invalidated snapshot requires a new search.
+
+Occurrence caches retain requested matching rows only, not surrounding file rows or whole batches.
+At most **two reads per result view** are pending; additional demands wait in a deduplicated queue
+bounded by the **1,000-entry ceiling**, with oldest deferred demands dropped on overflow. Adjacent
+source batches are not prefetched for occurrence views. This prevents distant visible matches from
+cancelling or evicting each other's loads. Completion notifications cover cached rows only; ordinary
+appends do not refresh already-loaded results. The sparse/dense regression visits 12 rows spaced
+2,000 source lines apart while appending, then checks stability across 20 further appends.
+
+Detected generation changes discard cached result text, cancel reads, and mark all result rows
+unavailable; a failed historical read never substitutes replacement-file text. The existing bounded
+metadata/tail detection limitations still apply. Refresh, result/source-tab close, and shutdown release
+the result index and cache and suppress pending completions. Failed/cancelled searches publish no
+partial index. Scan decoding still allocates transient batches, but matching text is not retained by
+the result store.
+
+Identifier payload remains **4 bytes per match**, plus chunk/directory/object overhead: memory is
+still proportional to match count until B08 introduces spillable storage. The existing `ListView` and
+model integer line-count ceiling remains. Multiple result tabs each own a cache and an identifier
+index; in-flight reads, model indexes, snapshots, selection/rendering, and scan temporaries remain
+outside any one cache's accounted budget. This is not a global heap bound.
+
+Reproducible counter evidence on Linux 7.2.11 amd64, Azul OpenJDK 27+35, Serial GC,
+`-Xms512m -Xmx512m -XX:-DoEscapeAnalysis` (536,805,376-byte maximum heap): for **1,000,000 generated
+all-match rows**, the former text-bearing accumulation retains **187,888,890 source-text characters**;
+the primitive result store retains **zero** source-text characters and **4,000,000 bytes of integer
+payload**, falling to zero after close. Thread allocation counters for generation/matching/accumulation
+were **430,586,264 bytes** for the former list and **396,025,864 bytes** for the index. These are
+allocation counters and retained-content counts, **not measured retained JVM heap or throughput**.
+The synthetic workload has no disk I/O and excludes the model index, FX publication and visible-row
+caches. Reproduce after `mvn test` (requires JDK thread-allocation counters):
+
+```bash
+java -Xms512m -Xmx512m -XX:+UseSerialGC -XX:-DoEscapeAnalysis -cp target/classes \
+  src/test/probes/OccurrenceIndexProbe.java
 ```
 
 ### Building a package

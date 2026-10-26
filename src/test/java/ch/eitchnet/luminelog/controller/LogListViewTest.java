@@ -19,6 +19,7 @@ package ch.eitchnet.luminelog.controller;
 import ch.eitchnet.luminelog.model.HighlightRule;
 import ch.eitchnet.luminelog.model.LogFileModel;
 import ch.eitchnet.luminelog.model.LogLine;
+import ch.eitchnet.luminelog.model.OccurrenceLogList;
 import ch.eitchnet.luminelog.model.VirtualLogList;
 import ch.eitchnet.luminelog.service.FileOpenService;
 import ch.eitchnet.luminelog.service.ScanService;
@@ -107,6 +108,92 @@ class LogListViewTest {
 			view.requestTail();
 		});
 		pulses();
+	}
+
+	@Test
+	void selectingLargeRangesDoesNotScheduleOffscreenReads() throws Exception {
+		Path path = tempDir.resolve("large-selection.log");
+		Files.writeString(path, "line\n".repeat(20000));
+		var model = new LogFileModel(path);
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var loader = new LineLoadingService(callbacks::add)) {
+			VirtualLogList[] items = new VirtualLogList[1];
+			fx(() -> {
+				view = new LogListView();
+				items[0] = new VirtualLogList(model, loader);
+				view.setItems(items[0]);
+				assertTrue(items[0].get(0).isLoading());
+			});
+			Runnable completion = callbacks.poll(5, TimeUnit.SECONDS);
+			assertNotNull(completion);
+			fx(() -> {
+				completion.run();
+				assertTrue(items[0].get(0).isAvailable());
+				// Finish the single adjacent prefetch before measuring selection work.
+			});
+			Runnable prefetch = callbacks.poll(5, TimeUnit.SECONDS);
+			assertNotNull(prefetch);
+			fx(prefetch);
+			fx(() -> {
+				assertTrue(items[0].get(0).isAvailable(), "Prefetch must preserve visible text");
+				view.getSelectionModel().selectRange(0, 20000);
+				assertEquals(0, loader.activeJobs() + loader.queuedJobs(),
+						"Selection must not request uncached offscreen text");
+				assertTrue(callbacks.isEmpty(), "Selection must not enqueue read completions");
+				view.getSelectionModel().clearSelection();
+				view.getSelectionModel().selectRange(0, 20);
+				view.followingProperty().set(false);
+				view.setFixedCellSize(24);
+				stage = new Stage();
+				stage.setScene(new Scene(new StackPane(view), 500, 300));
+				stage.show();
+			});
+			pulses();
+			fx(() -> {
+				assertEquals(20, view.getSelectionModel().getSelectedIndices().size());
+				for (var node : view.lookupAll(".list-cell")) {
+					if (node instanceof ListCell<?> cell && !cell.isEmpty())
+						assertTrue(((LogLine) cell.getItem()).isAvailable(), "Selected visible rows must stay loaded");
+				}
+				assertEquals(0, loader.activeJobs() + loader.queuedJobs());
+				assertTrue(callbacks.isEmpty());
+				items[0].close();
+			});
+		}
+	}
+
+	@Test
+	void selectingOccurrenceRangesDoesNotScheduleOffscreenReads() throws Exception {
+		Path path = tempDir.resolve("occurrence-selection.log");
+		Files.writeString(path, "match\n".repeat(5000));
+		var model = new LogFileModel(path);
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var loader = new LineLoadingService(callbacks::add)) {
+			VirtualLogList[] live = new VirtualLogList[1];
+			OccurrenceLogList[] results = new OccurrenceLogList[1];
+			fx(() -> {
+				view = new LogListView();
+				live[0] = new VirtualLogList(model, loader);
+				var identifiers = new ch.eitchnet.luminelog.model.ChunkedOccurrenceIndex.Builder();
+				for (int row = 0; row < 5000; row++)
+					identifiers.add(row);
+				results[0] = new OccurrenceLogList(model, live[0], live[0].snapshot(), identifiers.build(), loader);
+				view.setItems(results[0]);
+				assertTrue(results[0].get(0).isLoading());
+			});
+			Runnable completion = callbacks.poll(5, TimeUnit.SECONDS);
+			assertNotNull(completion);
+			fx(() -> {
+				completion.run();
+				view.getSelectionModel().selectAll();
+				assertEquals(java.util.List.of(0), view.getSelectionModel().getSelectedIndices());
+				assertEquals(0, loader.activeJobs() + loader.queuedJobs());
+				assertTrue(callbacks.isEmpty());
+				assertTrue(results[0].get(0).isAvailable());
+				results[0].close();
+				live[0].close();
+			});
+		}
 	}
 
 	@AfterEach
@@ -494,8 +581,91 @@ class LogListViewTest {
 				var layout = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getFirst().getContent();
 				assertTrue(((Label) layout.getChildren().getFirst()).getText().startsWith("Found 2 occurrences."));
 				var list = (LogListView) layout.getChildren().get(1);
+				assertInstanceOf(OccurrenceLogList.class, list.getItems());
+				assertTrue(list.getItems().getFirst().isLoading());
+			});
+			awaitUi(() -> occurrenceView(ui).getItems().stream().allMatch(LogLine::isAvailable));
+			fx(() -> {
 				assertEquals(java.util.List.of(new LogLine(1, "ERROR replacement"), new LogLine(2, "ERROR second")),
-						list.getItems());
+						occurrenceView(ui).getItems());
+			});
+		}
+	}
+
+	private static LogListView occurrenceView(ScanUi ui) {
+		var layout = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getFirst().getContent();
+		return (LogListView) layout.getChildren().getLast();
+	}
+
+	@Test
+	void identifierResultsPreserveCopyNavigationAndReleaseOnRefreshAndClose() throws Exception {
+		Path file = tempDir.resolve("identifier-results.log");
+		Files.writeString(file, "skip\nERROR one\nskip\nERROR two");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> search(ui));
+			workerFence(service);
+			fx(() -> {
+				drain(callbacks);
+				LogLine loading = occurrenceView(ui).getItems().getFirst();
+				assertTrue(loading.isLoading());
+				assertThrows(IllegalStateException.class, () -> MainController.selectedText(java.util.List.of(loading)));
+			});
+			awaitUi(() -> occurrenceView(ui).getItems().stream().allMatch(LogLine::isAvailable));
+			OccurrenceLogList[] previous = new OccurrenceLogList[1];
+			fx(() -> {
+				LogListView result = occurrenceView(ui);
+				previous[0] = (OccurrenceLogList) result.getItems();
+				assertEquals(java.util.List.of(new LogLine(2, "ERROR one"), new LogLine(4, "ERROR two")), result.getItems());
+				result.getSelectionModel().selectAll();
+				assertEquals("ERROR one" + System.lineSeparator() + "ERROR two",
+						MainController.selectedText(result.getSelectionModel().getSelectedItems()));
+				result.getSelectionModel().clearAndSelect(1);
+				result.getOnMouseClicked().handle(new MouseEvent(MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0,
+						MouseButton.PRIMARY, 2, false, false, false, false, false, false, false, false, false, false, null));
+			});
+			awaitUi(() -> view.getSelectionModel().getSelectedIndex() == 3);
+			fx(() -> {
+				search(ui);
+				assertEquals(0, previous[0].size(), "Refresh releases the old identifier store");
+			});
+			workerFence(service);
+			fx(() -> drain(callbacks));
+			awaitUi(() -> occurrenceView(ui).getItems().stream().allMatch(LogLine::isAvailable));
+			fx(() -> {
+				previous[0] = (OccurrenceLogList) occurrenceView(ui).getItems();
+				ui.occurrences().getTabs().clear();
+				assertEquals(0, previous[0].size(), "Closing results releases the identifier store");
+			});
+		}
+	}
+
+	@Test
+	void rewrittenOccurrenceRowsCannotBeCopiedOrNavigated() throws Exception {
+		Path file = tempDir.resolve("invalid-result.log");
+		Files.writeString(file, "skip\nERROR old");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> search(ui));
+			workerFence(service);
+			fx(() -> drain(callbacks));
+			awaitUi(() -> occurrenceView(ui).getItems().getFirst().isAvailable());
+			fx(() -> occurrenceView(ui).getSelectionModel().select(0));
+			Files.writeString(file, "replacement");
+			ui.model().updateIndex();
+			fx(() -> {
+				ui.items().publish(ui.model().snapshot());
+				LogListView result = occurrenceView(ui);
+				assertTrue(result.getSelectionModel().getSelectedItems().stream().noneMatch(LogLine::isAvailable));
+				LogLine row = result.getItems().getFirst();
+				assertTrue(row.isReadError());
+				assertThrows(IllegalStateException.class, () -> MainController.selectedText(java.util.List.of(row)));
+				result.getSelectionModel().select(0);
+				result.getOnMouseClicked().handle(new MouseEvent(MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0,
+						MouseButton.PRIMARY, 2, false, false, false, false, false, false, false, false, false, false, null));
+				assertEquals(-1, view.getSelectionModel().getSelectedIndex());
 			});
 		}
 	}

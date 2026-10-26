@@ -22,10 +22,12 @@ import ch.eitchnet.luminelog.service.LineLoadingService;
 
 import java.util.AbstractList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntPredicate;
 
-public class VirtualLogList extends ObservableListBase<LogLine> {
+public class VirtualLogList extends ObservableListBase<LogLine> implements NonLoadingAccess {
 
 	public static final long DEFAULT_CACHE_BYTES = 8 * 1024 * 1024;
 	public static final int DEFAULT_CACHE_ENTRIES = 1000;
@@ -40,6 +42,9 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 	private final Map<Integer, LogLine> cache;
 	private final long byteBudget;
 	private final int entryLimit;
+	private final IntPredicate retainedLine;
+	private final LinkedHashSet<Integer> deferred = new LinkedHashSet<>();
+	private boolean loadingSuppressed;
 	private long cachedBytes;
 	private long batchBytes;
 
@@ -55,9 +60,11 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 
 	private static class PendingRead {
 		private int validEnd;
+		private boolean prefetch;
 
-		private PendingRead(int validEnd) {
+		private PendingRead(int validEnd, boolean prefetch) {
 			this.validEnd = validEnd;
+			this.prefetch = prefetch;
 		}
 	}
 
@@ -78,13 +85,25 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 	}
 
 	VirtualLogList(LogFileModel logModel, long byteBudget, int entryLimit, LineLoadingService loader) {
+		this(logModel, logModel.snapshot(), byteBudget, entryLimit, loader);
+	}
+
+	VirtualLogList(LogFileModel logModel, LogFileModel.Snapshot snapshot, long byteBudget, int entryLimit,
+			LineLoadingService loader) {
+		this(logModel, snapshot, byteBudget, entryLimit, loader, null);
+	}
+
+	// Sparse views retain only referenced rows and let pending reads finish instead of cancelling on each miss.
+	VirtualLogList(LogFileModel logModel, LogFileModel.Snapshot snapshot, long byteBudget, int entryLimit,
+			LineLoadingService loader, IntPredicate retainedLine) {
 		if (byteBudget < 0 || entryLimit < 1)
 			throw new IllegalArgumentException("Cache budget must be nonnegative and entry limit positive");
 		this.logModel = logModel;
 		this.loader = loader;
-		this.snapshot = logModel.snapshot();
+		this.snapshot = snapshot;
 		this.byteBudget = byteBudget;
 		this.entryLimit = entryLimit;
+		this.retainedLine = retainedLine;
 		this.cache = new LinkedHashMap<>(16, 0.75f, true);
 	}
 
@@ -100,32 +119,62 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 
 		if (currentBatch != null && index >= currentBatch.startLine() && index < currentBatch.endLine()) {
 			LogLine result = new LogLine(index + 1, currentBatch.getLines().get(index - currentBatch.startLine()));
-			cacheLine(index, result);
+			if (!loadingSuppressed)
+				cacheLine(index, result);
 			return result;
 		}
 		if (closed)
 			return LogLine.readError(index + 1, "Log view closed");
 		if (byteBudget < lineWeight(LogLine.readError(index + 1, "Cache budget too small")))
 			return LogLine.readError(index + 1, "Cache budget too small");
-		request(index, false);
+		if (!loadingSuppressed)
+			request(index, false);
 		return LogLine.loading(index + 1);
 	}
 
+	@Override
+	public void withoutLoading(Runnable action) {
+		checkOwner();
+		boolean previous = loadingSuppressed;
+		loadingSuppressed = true;
+		try {
+			action.run();
+		} finally {
+			loadingSuppressed = previous;
+		}
+	}
+
 	private void request(int index, boolean prefetch) {
-		if (pending.containsKey(index))
+		if (closed)
 			return;
-		if (!prefetch && pending.keySet().stream().anyMatch(start -> index >= start
-				&& index < start + NEARBY_REQUEST_LINES && index < pending.get(start).validEnd))
+		if (pending.containsKey(index)) {
+			if (!prefetch)
+				pending.get(index).prefetch = false;
 			return;
+		}
+		if (retainedLine == null && !prefetch) {
+			for (var entry : pending.entrySet()) {
+				if (index >= entry.getKey() && index < entry.getKey() + NEARBY_REQUEST_LINES
+						&& index < entry.getValue().validEnd) {
+					entry.getValue().prefetch = false;
+					return;
+				}
+			}
+		}
 		if (pending.size() >= MAX_PENDING_READS) {
 			if (prefetch)
 				return;
+			if (retainedLine != null) {
+				defer(index);
+				return;
+			}
 			// A jump takes priority over obsolete viewport work.
 			loader.cancel(this);
 			pending.clear();
 		}
 		LogFileModel.Snapshot requested = snapshot;
-		PendingRead read = new PendingRead(requested.lineCount());
+		deferred.remove(index);
+		PendingRead read = new PendingRead(requested.lineCount(), prefetch);
 		pending.put(index, read);
 		if (!loader.request(this, requested, index, prefetch, result -> {
 			checkOwner();
@@ -138,10 +187,18 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 				return;
 			}
 			if (result.error() != null && snapshot != requested) {
-				request(index, prefetch);
+				request(index, read.prefetch);
+				return;
+			}
+			if (read.prefetch) {
+				if (result.error() == null)
+					retainPrefetch(result.batch(), read.validEnd);
+				drainDeferred();
 				return;
 			}
 			int end = index + 1;
+			var changedRows = retainedLine == null ? null : new LinkedHashSet<Integer>();
+			LogLine previous = retainedLine == null ? null : cache.get(index);
 			if (result.error() != null) {
 				currentBatch = null;
 				batchBytes = 0;
@@ -152,42 +209,91 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 				currentBatch = null;
 				batchBytes = 0;
 				long weight = batchWeight(batch);
-				if (weight <= byteBudget && batch.endLine() <= read.validEnd) {
+				if (retainedLine == null && weight <= byteBudget && batch.endLine() <= read.validEnd) {
 					currentBatch = batch;
 					batchBytes = weight;
 					trimCache();
 				}
 				end = Math.min(batch.endLine(), read.validEnd);
 				for (int i = batch.startLine(); i < end; i++) {
-					if (i != index && !cache.containsKey(i))
+					if (i != index && !cache.containsKey(i) && (retainedLine == null
+							|| ((deferred.contains(i) || pending.containsKey(i)) && retainedLine.test(i)))) {
 						cacheLine(i, new LogLine(i + 1, batch.getLines().get(i - batch.startLine())));
+						if (changedRows != null)
+							changedRows.add(i);
+					}
 				}
 				cacheLine(index, new LogLine(index + 1, batch.getLines().getFirst()));
 				// Never loop forever loading a row that cannot fit this cache.
 				if (currentBatch == null && !cache.containsKey(index))
 					cacheLine(index, LogLine.readError(index + 1, "Line exceeds this view's cache budget"));
 			}
+			if (changedRows != null && !java.util.Objects.equals(previous, cache.get(index)))
+				changedRows.add(index);
 			beginChange();
 			try {
 				for (int i = index; i < end; i++)
-					nextUpdate(i);
+					if (changedRows == null || (changedRows.contains(i) && cache.containsKey(i)))
+						nextUpdate(i);
 			} finally {
 				endChange();
 			}
 			// At most one adjacent batch is prefetched; prefetch never chains.
-			if (!prefetch && result.error() == null && end < size() && !cache.containsKey(end))
+			if (retainedLine == null && !read.prefetch && result.error() == null && end < size() && !cache.containsKey(end))
 				request(end, true);
+			drainDeferred();
 		})) {
 			pending.remove(index);
+			if (retainedLine != null)
+				defer(index);
 			if (!prefetch && Platform.isFxApplicationThread()) {
 				retryIndex = index;
 				if (retry == null) {
 					retry = new javafx.animation.PauseTransition(javafx.util.Duration.millis(RETRY_DELAY_MILLIS));
-					retry.setOnFinished(_ -> request(retryIndex, false));
+					retry.setOnFinished(_ -> {
+						if (retainedLine == null)
+							request(retryIndex, false);
+						else
+							drainDeferred();
+					});
 				}
 				if (retry.getStatus() != javafx.animation.Animation.Status.RUNNING)
 					retry.playFromStart();
 			}
+		}
+	}
+
+	private void retainPrefetch(LogFileModel.Batch batch, int validEnd) {
+		// Speculation may use spare capacity, but must never evict demanded text or its batch.
+		beginChange();
+		try {
+			for (int i = batch.startLine(); i < Math.min(batch.endLine(), validEnd); i++) {
+				if (cache.containsKey(i))
+					continue;
+				LogLine line = new LogLine(i + 1, batch.getLines().get(i - batch.startLine()));
+				if (cache.size() >= entryLimit || lineWeight(line) > byteBudget - batchBytes - cachedBytes)
+					break;
+				cacheLine(i, line);
+				nextUpdate(i);
+			}
+		} finally {
+			endChange();
+		}
+	}
+
+	private void defer(int index) {
+		deferred.remove(index);
+		if (deferred.size() >= entryLimit)
+			deferred.removeFirst();
+		deferred.add(index);
+	}
+
+	private void drainDeferred() {
+		int attempts = deferred.size();
+		while (!closed && pending.size() < MAX_PENDING_READS && !deferred.isEmpty() && attempts-- > 0) {
+			int index = deferred.removeFirst();
+			if (!cache.containsKey(index))
+				request(index, false);
 		}
 	}
 
@@ -218,6 +324,7 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 			retry.stop();
 		loader.cancel(this);
 		pending.clear();
+		deferred.clear();
 		cache.clear();
 		cachedBytes = 0;
 		currentBatch = null;
