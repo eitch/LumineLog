@@ -18,6 +18,18 @@ package ch.eitchnet.luminelog.model;
 
 public record LogLine(int lineNumber, String content, String errorMessage) {
 
+	public static LogLine loading(int lineNumber) {
+		return new LogLine(lineNumber, null, null);
+	}
+
+	public boolean isLoading() {
+		return content == null;
+	}
+
+	public boolean isAvailable() {
+		return !isLoading() && !isReadError();
+	}
+
 	public LogLine(int lineNumber, String content) {
 		this(lineNumber, content, null);
 	}

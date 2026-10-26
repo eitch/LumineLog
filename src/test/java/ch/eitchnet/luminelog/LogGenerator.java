@@ -30,7 +30,7 @@ public class LogGenerator {
 			"Connection established to remote server."};
 
 	private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
-	private static final long MAX_FILE_SIZE = 20 * 1024 * 1024; // 10MB
+	private static final long MAX_FILE_SIZE = 20 * 1024 * 1024;
 	private static final Path LOG_FILE = Paths.get("target", "generated-test.log");
 
 	private final Random random = new Random();
@@ -87,7 +87,7 @@ public class LogGenerator {
 
 	private void checkSizeAndTruncate() throws IOException {
 		if (Files.exists(LOG_FILE) && Files.size(LOG_FILE) > MAX_FILE_SIZE) {
-			System.out.println("Log file reached 10MB, truncating...");
+			System.out.println("Log file reached max file size, truncating...");
 			// Simple truncation: clear the file
 			Files.writeString(LOG_FILE, "", StandardOpenOption.TRUNCATE_EXISTING);
 		}

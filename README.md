@@ -123,9 +123,10 @@ Each `VirtualLogList` now has a combined **8 MiB accounted-data budget** for its
 and retained current batch, plus the existing **1,000 cached-row ceiling**. Both defaults are
 named constants (`DEFAULT_CACHE_BYTES`, `DEFAULT_CACHE_ENTRIES`). Eviction follows access order;
 the requested row is admitted last so batch preloading cannot evict it before it is returned.
-A row or batch that exceeds the available budget is still read completely within B01's limits
-and returned, but is not retained. This can mean repeated reads under a small budget; it never
-means shortened content or a missing row. Publication releases the batch and removes the old
+A batch that exceeds the available budget is not retained; individual rows are admitted if they fit.
+Since B05, a row that cannot fit a deliberately reduced cache budget reports an explicit unavailable
+state rather than repeatedly loading or retaining data outside the budget. The default budget fits
+every B01-supported individual line. Content is never shortened. Publication releases the batch and removes the old
 final row's weight; replacement resets cache accounting.
 
 Accounting deliberately overestimates shared/compact text: a string costs 64 bytes plus its
@@ -139,7 +140,7 @@ The budget is per list, not global: tabs multiply it. Fixed list/map objects, in
 snapshots, listener-held removed-item lists, read/decode temporaries, rendered/selected rows,
 concurrent scans and occurrence results are outside this accounting. During reset notification,
 the removed-items wrapper can retain the prior cache as well as the new cache; listeners may
-retain it longer. Cache-miss reads remain synchronous until B05.
+retain it longer. Since B05, cache-miss reads run on bounded background workers.
 
 Comparable retained-data counter evidence on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35,
 with `-Xms128m -Xmx128m -XX:+UseSerialGC` (reported max heap 134,152,192 bytes): two lists sharing
@@ -149,7 +150,8 @@ and after B03, combined peak retained-data weight fell from **53,503,968 to 15,7
 (26,751,984 to 7,868,384 per list), including both retained batches. The shared model had 49
 offsets (392 logical offset bytes, excluding index chunk/directory overhead), one current
 snapshot, no historical snapshots, pending tasks, scans or occurrence results. Read temporaries
-were excluded. This is not a heap profile or a throughput claim. Reproduce after `mvn test`:
+were excluded. This is historical B03 evidence, not a heap profile or throughput claim. The probe
+now awaits asynchronous B05 loading; prefetch can change the observed cache weights. Run after `mvn test`:
 
 ```bash
 mvn -q dependency:build-classpath -Dmdep.outputFile=target/cache-probe-classpath.txt
@@ -189,6 +191,52 @@ file I/O or decoded-result fixture, so storage is not involved. Reproduce after 
 
 ```bash
 java -Xms64m -Xmx64m -cp target/classes src/test/probes/ScanConcurrencyProbe.java
+```
+
+#### Asynchronous visible-line loading (B05)
+
+`VirtualLogList.get()` now only looks up cached data or submits a request; it does **no file I/O**.
+`LineLoadingService` reads and decodes on **two daemon workers**, independent of long scans, with
+**16 waiting slots** (`DEFAULT_WORKERS`, `DEFAULT_QUEUE_CAPACITY`). Admission also counts decoded
+results awaiting FX delivery: at most **18 live requests/results**, with one coalesced delivery
+callback per service. A blocked read keeps its physical worker until it exits, even after cancellation.
+
+Each list admits at most **two pending requests** (`MAX_PENDING_READS`), coalesces nearby misses
+within **64 rows** (`NEARBY_REQUEST_LINES`), and abandons obsolete pending work on large viewport
+jumps. Demand reads precede queued prefetch. A successful demand read can prefetch **one adjacent
+batch** (up to B01's 1 MiB/1,000-row limits); prefetch never chains. Saturated demand requests retry
+on the FX thread after **100 ms** (`RETRY_DELAY_MILLIS`) without performing reads there.
+
+Loading and unavailable rows are nonselectable presentation states, not searchable/copyable text.
+Failed reads show their error; use **Retry unavailable lines** in the context menu to retry.
+Occurrence navigation selects its target only once loaded, unless superseded by navigation or
+a file reset. Cache admission, list updates, and rendering remain on the owning FX thread.
+Generation resets cancel outstanding reads. Append publications restrict each pending read to its
+demonstrably unchanged prefix, excluding every formerly final row; request tokens reject obsolete
+completions. This avoids starving stable rows during continuous appends. Unchanged cached rows
+survive appends, while the old final row is invalidated. Closing a tab releases its cache and cancels reads; application shutdown closes the
+shared controller-owned loader without waiting for slow storage.
+
+Reset notifications retain cached removed rows; uncached historical rows explicitly report
+unavailability rather than doing synchronous historical reads or substituting replacement content.
+The 8 MiB accounted-data cache budget remains **per list**, not a global heap bound. Two reads may
+temporarily coexist with each tab's cache; the service-wide admission bound also covers completed
+payloads awaiting publication. Each admitted batch is limited to 1 MiB encoded bytes plus decoded
+strings and object overhead; decode temporaries, indexes, selected/rendered rows, scans, and occurrence
+results remain outside cache accounting. Initial indexing still runs during opening until B06.
+
+JFR counter evidence on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35, `-Xms128m -Xmx128m`
+(134,217,728-byte maximum heap): one tab visited 20 batch starts in a 5,120,000-byte ASCII fixture
+(20,000 256-byte rows plus an empty final row). Reproducing the former synchronous miss policy
+produced **60 calling-thread file reads**. The B05 list path produced **zero calling-thread reads**
+and **60 worker reads**. `jdk.FileRead` used a zero threshold; indexing was excluded and local storage
+was warm. This verifies read placement, not FX latency, exact heap usage, or faster disk throughput.
+The probe cleans up its fixture/recordings under `target`. Reproduce after `mvn test`:
+
+```bash
+mvn -q dependency:build-classpath -Dmdep.outputFile=target/line-read-probe-classpath.txt
+java -Xms128m -Xmx128m \
+  -cp "target/classes:$(<target/line-read-probe-classpath.txt)" src/test/probes/AsyncLineReadProbe.java
 ```
 
 ### Building a package

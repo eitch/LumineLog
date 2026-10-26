@@ -19,6 +19,7 @@ package ch.eitchnet.luminelog.controller;
 import ch.eitchnet.luminelog.LumineLogApplication;
 import ch.eitchnet.luminelog.model.*;
 import ch.eitchnet.luminelog.service.ScanService;
+import ch.eitchnet.luminelog.service.LineLoadingService;
 import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -66,6 +67,7 @@ public class MainController {
 
 	private final ConfigService configService = new ConfigService();
 	private final ScanService scanService;
+	private final LineLoadingService lineLoadingService = new LineLoadingService(Platform::runLater);
 	private final Object highlightCountKey = new Object();
 	private boolean disposed;
 
@@ -138,6 +140,7 @@ public class MainController {
 		void stopTailing() {
 			closed = true;
 			pendingUpdate.set(null);
+			logItems.close();
 			logListView.dispose();
 			if (tailTimer != null) {
 				tailTimer.cancel();
@@ -606,7 +609,7 @@ public class MainController {
 
 		try {
 			LogFileModel logModel = new LogFileModel(file.toPath());
-			VirtualLogList logItems = new VirtualLogList(logModel);
+			VirtualLogList logItems = new VirtualLogList(logModel, lineLoadingService);
 			LogListView logListView = createLogListView();
 			logListView.setItems(logItems);
 
@@ -676,9 +679,9 @@ public class MainController {
 
 	static String selectedText(List<LogLine> selected) {
 		for (LogLine line : selected) {
-			if (line.isReadError())
+			if (!line.isAvailable())
 				throw new IllegalStateException("Cannot copy selection: line " + line.lineNumber()
-						+ " is unavailable. " + line.errorMessage());
+						+ (line.isLoading() ? " is still loading." : " is unavailable. " + line.errorMessage()));
 		}
 		return selected.stream().map(LogLine::content).collect(Collectors.joining(System.lineSeparator()));
 	}
@@ -699,6 +702,12 @@ public class MainController {
 		MenuItem copyItem = new MenuItem("Copy Selected Lines");
 		copyItem.setOnAction(_ -> copySelectedLines(listView));
 		contextMenu.getItems().add(copyItem);
+		MenuItem retryItem = new MenuItem("Retry unavailable lines");
+		retryItem.setOnAction(_ -> {
+			if (listView.getItems() instanceof VirtualLogList items)
+				items.retryUnavailable();
+		});
+		contextMenu.getItems().add(retryItem);
 
 		listView.setContextMenu(contextMenu);
 
@@ -1127,9 +1136,7 @@ public class MainController {
 			int index = selected.lineNumber() - 1;
 			if (index < 0 || index >= state.logItems.size())
 				return;
-			state.logListView.followingProperty().set(false);
-			state.logListView.getSelectionModel().select(index);
-			state.logListView.scrollTo(index);
+			state.logListView.navigateTo(index);
 		};
 	}
 
@@ -1275,7 +1282,14 @@ public class MainController {
 	private boolean handleEmptyItem(ListCell<LogLine> listCell, LogLine item, boolean empty) {
 		listCell.setText(null);
 		listCell.setTooltip(null);
+		listCell.setDisable(!empty && item != null && !item.isAvailable());
 		if (!empty && item != null) {
+			if (item.isLoading()) {
+				listCell.setGraphic(null);
+				listCell.setText("Loading line " + item.lineNumber() + "…");
+				listCell.setStyle("-fx-text-fill: gray; -fx-font-family: 'monospace';");
+				return true;
+			}
 			if (item.isReadError()) {
 				listCell.setGraphic(null);
 				listCell.setText("Line " + item.lineNumber() + " unavailable: " + item.errorMessage());
@@ -1440,6 +1454,7 @@ public class MainController {
 		}
 		openOccurrenceTabs.clear();
 		scanService.close();
+		lineLoadingService.close();
 	}
 
 	private String toWebColor(Color color) {

@@ -18,6 +18,7 @@
 import ch.eitchnet.luminelog.model.LogFileModel;
 import ch.eitchnet.luminelog.model.LogLine;
 import ch.eitchnet.luminelog.model.VirtualLogList;
+import ch.eitchnet.luminelog.service.LineLoadingService;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,21 +43,39 @@ public final class WeightedCacheProbe {
 					+ " arch=" + System.getProperty("os.arch") + " store=" + Files.getFileStore(path).type()
 					+ " fileBytes=" + Files.size(path));
 			var model = new LogFileModel(path);
-			var first = new VirtualLogList(model);
-			var second = new VirtualLogList(model);
-			long peak = 0;
-			for (int i = 0; i < first.size(); i++) {
-				if (first.get(i).isReadError() || second.get(i).isReadError())
-					throw new AssertionError("Unexpected read failure");
-				peak = Math.max(peak, weight(first) + weight(second));
+			var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+			try (var loader = new LineLoadingService(callbacks::add)) {
+				var first = new VirtualLogList(model, loader);
+				var second = new VirtualLogList(model, loader);
+				long peak = 0;
+				for (int i = 0; i < first.size(); i++) {
+					if (loaded(first, i, callbacks).isReadError() || loaded(second, i, callbacks).isReadError())
+						throw new AssertionError("Unexpected read failure");
+					peak = Math.max(peak, weight(first) + weight(second));
+				}
+				System.out.println("tabs=2 rows=" + first.size() + " perTab=" + weight(first)
+						+ " combined=" + (weight(first) + weight(second)) + " peakCombined=" + peak);
+				System.out.println("Shared model: one current snapshot/index, logicalOffsetBytes="
+						+ 8L * first.size() + "; no scans/results; asynchronous in-flight reads/temporaries excluded");
+				first.close();
+				second.close();
 			}
-			System.out.println("tabs=2 rows=" + first.size() + " perTab=" + weight(first)
-					+ " combined=" + (weight(first) + weight(second)) + " peakCombined=" + peak);
-			System.out.println("Shared model: one current snapshot/index, logicalOffsetBytes="
-					+ 8L * first.size() + "; no scans/results/pending tasks; synchronous read temporaries excluded");
 		} finally {
 			Files.delete(path);
 		}
+	}
+
+	private static LogLine loaded(VirtualLogList list, int index,
+			java.util.concurrent.BlockingQueue<Runnable> callbacks) throws Exception {
+		LogLine line = list.get(index);
+		while (line.isLoading()) {
+			Runnable callback = callbacks.poll(10, java.util.concurrent.TimeUnit.SECONDS);
+			if (callback == null)
+				throw new AssertionError("Loading timed out");
+			callback.run();
+			line = list.get(index);
+		}
+		return line;
 	}
 
 	private static long stringWeight(String value) {

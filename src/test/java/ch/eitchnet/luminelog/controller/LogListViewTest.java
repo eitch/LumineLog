@@ -21,6 +21,7 @@ import ch.eitchnet.luminelog.model.LogFileModel;
 import ch.eitchnet.luminelog.model.LogLine;
 import ch.eitchnet.luminelog.model.VirtualLogList;
 import ch.eitchnet.luminelog.service.ScanService;
+import ch.eitchnet.luminelog.service.LineLoadingService;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -296,6 +297,8 @@ class LogListViewTest {
 
 	@Test
 	void errorRowsAreDistinctAndCannotBeCopiedAsText() throws Exception {
+		assertThrows(IllegalStateException.class,
+				() -> MainController.selectedText(java.util.List.of(LogLine.loading(1))));
 		LogLine error = LogLine.readError(2, "Line exceeds read limit");
 		assertEquals("first" + System.lineSeparator() + "last", MainController.selectedText(
 				java.util.List.of(new LogLine(1, "first"), new LogLine(3, "last"))));
@@ -313,14 +316,81 @@ class LogListViewTest {
 				assertNull(cell.getGraphic());
 				assertNotNull(cell.getTooltip());
 				assertEquals(false, handle.invoke(controller, cell, new LogLine(3, "real text"), false));
+				assertFalse(cell.isDisable());
 				assertNull(cell.getText());
 				assertNull(cell.getTooltip());
+				assertEquals(true, handle.invoke(controller, cell, LogLine.loading(4), false));
+				assertTrue(cell.isDisable());
+				assertTrue(cell.getText().contains("Loading line 4"));
 				assertEquals(true, handle.invoke(controller, cell, null, true));
 				assertEquals("", cell.getStyle());
 			} catch (ReflectiveOperationException e) {
 				throw new AssertionError(e);
 			}
 		});
+	}
+
+	@Test
+	void presentationRowsCannotBeSelectedByKeyboardRangeOrSelectAll() throws Exception {
+		fx(() -> {
+			view = new LogListView();
+			view.setItems(FXCollections.observableArrayList(new LogLine(1, "one"), LogLine.loading(2),
+					LogLine.readError(3, "unavailable"), new LogLine(4, "four")));
+			var selection = view.getSelectionModel();
+			selection.select(1);
+			assertTrue(selection.isEmpty());
+			selection.clearAndSelect(2);
+			assertTrue(selection.isEmpty());
+			selection.selectRange(0, 4);
+			assertEquals(java.util.List.of(0, 3), java.util.List.copyOf(selection.getSelectedIndices()));
+			selection.clearSelection();
+			selection.selectAll();
+			assertEquals(java.util.List.of(0, 3), java.util.List.copyOf(selection.getSelectedIndices()));
+			assertEquals("one" + System.lineSeparator() + "four", MainController.selectedText(selection.getSelectedItems()));
+			selection.clearAndSelect(0);
+			selection.selectNext();
+			assertFalse(selection.isSelected(1));
+			view.getItems().set(0, LogLine.loading(1));
+			assertTrue(selection.isEmpty());
+		});
+	}
+
+	@Test
+	void navigationAndPulsesContinueWhileLineDeliveryIsHeld() throws Exception {
+		Path file = tempDir.resolve("delayed-lines.log");
+		Files.writeString(file, "line\n".repeat(50));
+		LogFileModel model = new LogFileModel(file);
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		VirtualLogList[] items = new VirtualLogList[1];
+		try (var loader = new LineLoadingService(callbacks::add)) {
+			fx(() -> {
+				items[0] = new VirtualLogList(model, loader);
+				assertTrue(items[0].get(0).isLoading());
+				view = new LogListView();
+				view.setFixedCellSize(24);
+				view.setItems(items[0]);
+				view.followingProperty().set(false);
+				stage = new Stage();
+				stage.setScene(new Scene(new StackPane(view), 500, 300));
+				stage.show();
+				view.navigateTo(20);
+				view.getSelectionModel().select(20);
+				assertTrue(view.getSelectionModel().isEmpty());
+			});
+			Runnable delivery = callbacks.poll(5, TimeUnit.SECONDS);
+			assertNotNull(delivery);
+			pulses();
+			fx(() -> {
+				assertTrue(items[0].get(20).isLoading());
+				delivery.run();
+				assertEquals("line", items[0].get(20).content());
+				assertEquals(20, view.getSelectionModel().getSelectedIndex());
+				items[0].close();
+			});
+		} finally {
+			if (items[0] != null)
+				fx(items[0]::close);
+		}
 	}
 
 	@Test

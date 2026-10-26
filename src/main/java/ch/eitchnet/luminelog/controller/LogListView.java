@@ -21,6 +21,7 @@ import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
+import javafx.collections.ListChangeListener;
 import javafx.geometry.Bounds;
 import javafx.geometry.Orientation;
 import javafx.scene.Node;
@@ -45,6 +46,14 @@ public class LogListView extends ListView<LogLine> {
 	private double pointerY;
 	private int tailPulses;
 	private long lastDragScroll;
+	private int pendingSelection = -1;
+	private final ListChangeListener<LogLine> loadedLines = change -> {
+		while (change.next()) {
+			if (change.wasReplaced() || change.wasRemoved())
+				pendingSelection = -1;
+		}
+		selectPendingLine();
+	};
 	private final AnimationTimer animation = new AnimationTimer() {
 		@Override
 		public void handle(long now) {
@@ -65,7 +74,16 @@ public class LogListView extends ListView<LogLine> {
 	};
 
 	public LogListView() {
+		setSelectionModel(new AvailableLineSelectionModel(this));
 		getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+		getItems().addListener(loadedLines);
+		itemsProperty().addListener((_, oldItems, newItems) -> {
+			pendingSelection = -1;
+			if (oldItems != null)
+				oldItems.removeListener(loadedLines);
+			if (newItems != null)
+				newItems.addListener(loadedLines);
+		});
 		widthProperty().addListener((_, _, _) -> requestTail());
 		heightProperty().addListener((_, _, _) -> requestTail());
 		following.addListener((_, _, enabled) -> {
@@ -79,12 +97,14 @@ public class LogListView extends ListView<LogLine> {
 				requestTail();
 		});
 		addEventFilter(ScrollEvent.SCROLL, event -> {
+			pendingSelection = -1;
 			if (event.getDeltaY() > 0)
 				following.set(false);
 			else if (event.getDeltaY() < 0)
 				Platform.runLater(this::resumeAtBottom);
 		});
 		addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+			pendingSelection = -1;
 			KeyCode code = event.getCode();
 			if (code == KeyCode.UP || code == KeyCode.PAGE_UP || code == KeyCode.HOME)
 				following.set(false);
@@ -119,6 +139,7 @@ public class LogListView extends ListView<LogLine> {
 	}
 
 	public void dispose() {
+		pendingSelection = -1;
 		cancelSelectionGesture();
 		animation.stop();
 	}
@@ -150,6 +171,7 @@ public class LogListView extends ListView<LogLine> {
 	}
 
 	private void mousePressed(MouseEvent event) {
+		pendingSelection = -1;
 		if (event.getButton() != MouseButton.PRIMARY)
 			return;
 		Node node = event.getPickResult().getIntersectedNode();
@@ -165,6 +187,27 @@ public class LogListView extends ListView<LogLine> {
 			anchor = event.isShiftDown() && getFocusModel().getFocusedIndex() >= 0
 					? getFocusModel().getFocusedIndex() : cell.getIndex();
 			endpoint = -1;
+		}
+	}
+
+	public void navigateTo(int index) {
+		if (index < 0 || index >= getItems().size())
+			return;
+		following.set(false);
+		pendingSelection = index;
+		scrollTo(index);
+		selectPendingLine();
+	}
+
+	private void selectPendingLine() {
+		if (pendingSelection < 0 || pendingSelection >= getItems().size())
+			return;
+		LogLine line = getItems().get(pendingSelection);
+		if (!line.isLoading()) {
+			int index = pendingSelection;
+			pendingSelection = -1;
+			if (line.isAvailable())
+				getSelectionModel().clearAndSelect(index);
 		}
 	}
 
