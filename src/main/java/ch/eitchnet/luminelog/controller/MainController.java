@@ -22,6 +22,7 @@ import ch.eitchnet.luminelog.service.FileOpenService;
 import ch.eitchnet.luminelog.service.ScanService;
 import ch.eitchnet.luminelog.service.LineLoadingService;
 import ch.eitchnet.luminelog.service.OccurrencePageService;
+import ch.eitchnet.luminelog.service.TailScheduler;
 import ch.eitchnet.luminelog.util.DialogUtil;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -72,6 +73,7 @@ public class MainController {
 	private final FileOpenService fileOpenService;
 	private final LineLoadingService lineLoadingService = new LineLoadingService(Platform::runLater);
 	private final OccurrencePageService occurrencePageService = new OccurrencePageService(Platform::runLater);
+	private final TailScheduler tailScheduler = new TailScheduler();
 	private final Object highlightCountKey = new Object();
 	private boolean disposed;
 
@@ -126,11 +128,14 @@ public class MainController {
 		String highlightGroup;
 		LogFileModel logModel;
 		VirtualLogList logItems;
-		Timer tailTimer;
+		TailScheduler.Registration tailTimer;
 		LogListView logListView;
 		int[] highlightCounts;
 		int lastCountedLine = 0;
 		volatile boolean closed;
+		volatile boolean active;
+		volatile long observedGeneration;
+		volatile long notifiedGeneration;
 		final AtomicReference<LogFileModel.Snapshot> pendingUpdate = new AtomicReference<>();
 		final AtomicBoolean updateQueued = new AtomicBoolean();
 		List<HighlightRule> countedRules = List.of();
@@ -146,6 +151,8 @@ public class MainController {
 			this.logModel = logModel;
 			this.logItems = logItems;
 			this.logListView = logListView;
+			if (logItems != null)
+				observedGeneration = notifiedGeneration = logItems.snapshot().generation();
 		}
 
 		void stopTailing() {
@@ -159,7 +166,7 @@ public class MainController {
 				logItems.close();
 			logListView.dispose();
 			if (tailTimer != null) {
-				tailTimer.cancel();
+				tailTimer.close();
 				tailTimer = null;
 			}
 		}
@@ -230,6 +237,8 @@ public class MainController {
 	}
 
 	private void handleActiveTabChanged(Tab oldTab, Tab newTab) {
+		if (oldTab != null && oldTab.getUserData() instanceof TabState previous)
+			setTailActive(previous, false);
 		if (oldTab != null && !this.ignoreGroupChange)
 			saveHighlights();
 
@@ -237,6 +246,8 @@ public class MainController {
 			this.statusLabel.setText("No file opened");
 		} else {
 			TabState state = (TabState) newTab.getUserData();
+			setTailActive(state, true);
+			publishPendingTailUpdate(state);
 			updatingTailCheckBox = true;
 			try {
 				tailCheckBox.setSelected(state.logListView.followingProperty().get());
@@ -806,54 +817,82 @@ public class MainController {
 	}
 
 	private void startTailing(TabState state) {
-		state.tailTimer = new Timer(true);
-		state.tailTimer.schedule(new TimerTask() {
-			private long lastVersion = state.logItems.snapshot().version();
-			private boolean failed;
+		state.observedGeneration = state.notifiedGeneration = state.logItems.snapshot().generation();
+		state.tailTimer = tailScheduler.watch(state.logModel, update -> acceptTailUpdate(state, update),
+				error -> logger.warn("Could not update log file {}", state.file, error));
+		setTailActive(state, getActiveTabState() == state);
+	}
 
-			@Override
-			public void run() {
-				if (!state.closed) {
-					try {
-						state.logModel.updateIndex();
-						failed = false;
-						LogFileModel.Snapshot update = state.logModel.snapshot();
-						if (update.version() != lastVersion) {
-							lastVersion = update.version();
-							state.pendingUpdate.set(update);
-							queuePublication(state);
-						}
-					} catch (IOException e) {
-						if (!failed)
-							logger.warn("Could not update log file {}", state.file, e);
-						failed = true;
-					}
-				}
-			}
-		}, 50, 50);
+	private void acceptTailUpdate(TabState state, LogFileModel.Snapshot update) {
+		if (state.closed)
+			return;
+		state.observedGeneration = update.generation();
+		state.pendingUpdate.set(update);
+		if (state.closed) {
+			state.pendingUpdate.set(null);
+			return;
+		}
+		queuePublication(state);
+	}
+
+	private void setTailActive(TabState state, boolean active) {
+		state.active = active && !state.closed;
+		if (state.tailTimer != null)
+			state.tailTimer.setActive(state.active);
 	}
 
 	private void queuePublication(TabState state) {
+		LogFileModel.Snapshot pending = state.pendingUpdate.get();
+		if (!state.active && (pending == null || pending.generation() == state.notifiedGeneration))
+			return;
 		if (state.closed || !state.updateQueued.compareAndSet(false, true))
 			return;
 		Platform.runLater(() -> {
-			LogFileModel.Snapshot update = state.pendingUpdate.getAndSet(null);
 			state.updateQueued.set(false);
-			if (state.closed || update == null)
+			if (state.closed)
 				return;
-			if (state.logItems.snapshot().generation() != update.generation()) {
-				state.logListView.cancelSelectionGesture();
-				state.logListView.getSelectionModel().clearSelection();
-			}
-			state.logItems.publish(update);
-			state.logListView.requestTail();
-			if (getActiveTabState() == state) {
+			if (state.active) {
+				publishPendingTailUpdate(state);
 				updateHighlightsBar();
 				updateFooterStatus(state);
+			} else {
+				LogFileModel.Snapshot update = state.pendingUpdate.get();
+				if (update != null)
+					notifyOccurrenceGeneration(state, update.generation());
 			}
 			if (state.pendingUpdate.get() != null)
 				queuePublication(state);
 		});
+	}
+
+	private void publishPendingTailUpdate(TabState state) {
+		LogFileModel.Snapshot update = state.pendingUpdate.getAndSet(null);
+		if (state.closed || update == null)
+			return;
+		notifyOccurrenceGeneration(state, update.generation());
+		if (state.logItems.snapshot().generation() != update.generation()) {
+			state.logListView.cancelSelectionGesture();
+			state.logListView.getSelectionModel().clearSelection();
+		}
+		state.logItems.publish(update);
+		state.logListView.requestTail();
+	}
+
+	private void notifyOccurrenceGeneration(TabState state, long generation) {
+		if (state.notifiedGeneration == generation)
+			return;
+		state.notifiedGeneration = generation;
+		Map<HighlightRule, Tab> tabs = openOccurrenceTabs.get(state);
+		if (tabs == null)
+			return;
+		for (Tab tab : tabs.values()) {
+			if (tab.getContent() instanceof VBox box) {
+				for (Node node : box.getChildren()) {
+					if (node instanceof LogListView list && list.getItems() instanceof OccurrenceLogList results)
+						results.invalidateIfGenerationChanged(generation);
+				}
+			}
+		}
 	}
 
 	@FXML
@@ -1139,7 +1178,7 @@ public class MainController {
 			case SUCCEEDED -> {
 				occurrenceTab.getProperties().remove("searchJob");
 				layout.getChildren().remove(cancel);
-				if (state.logItems.snapshot().generation() != snapshot.generation()) {
+				if (Math.max(state.observedGeneration, state.logItems.snapshot().generation()) != snapshot.generation()) {
 					event.result().close();
 					header.setText("File changed during search. Click the highlight to search again.");
 					layout.getChildren().remove(progressBar);
@@ -1188,7 +1227,7 @@ public class MainController {
 			LogFileModel.Snapshot snapshot, LogListView listView) {
 		return event -> {
 			if (event.getClickCount() != 2 || state.closed
-					|| state.logItems.snapshot().generation() != snapshot.generation())
+					|| Math.max(state.observedGeneration, state.logItems.snapshot().generation()) != snapshot.generation())
 				return;
 			LogLine selected = listView.getSelectionModel().getSelectedItem();
 			if (selected == null || !selected.isAvailable())
@@ -1536,6 +1575,7 @@ public class MainController {
 				cancelOccurrenceSearch(tab);
 		}
 		openOccurrenceTabs.clear();
+		tailScheduler.close();
 		fileOpenService.close();
 		scanService.close();
 		lineLoadingService.close();

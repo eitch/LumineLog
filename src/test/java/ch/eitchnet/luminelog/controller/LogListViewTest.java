@@ -24,6 +24,7 @@ import ch.eitchnet.luminelog.model.VirtualLogList;
 import ch.eitchnet.luminelog.service.FileOpenService;
 import ch.eitchnet.luminelog.service.ScanService;
 import ch.eitchnet.luminelog.service.LineLoadingService;
+import ch.eitchnet.luminelog.service.TailScheduler;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -963,6 +964,185 @@ class LogListViewTest {
 			tabs.getSelectionModel().selectedItemProperty().addListener((_, oldTab, newTab) -> invoke(controller,
 					"handleActiveTabChanged", new Class<?>[] { Tab.class, Tab.class }, oldTab, newTab));
 			return controller;
+		} catch (ReflectiveOperationException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	@Test
+	void inactiveTailingStillIndexesWithFollowPausedAndReleasesRegistrationOnClose() throws Exception {
+		Path path = tempDir.resolve("scheduled-tail.log");
+		Files.writeString(path, "old");
+		LogFileModel model = new LogFileModel(path);
+		MainController[] controller = new MainController[1];
+		Tab[] tab = new Tab[1];
+		fx(() -> {
+			controller[0] = openingController();
+			tab[0] = readyTailTab(controller[0], model, path);
+			((LogListView) tab[0].getContent()).followingProperty().set(false);
+			Object state = tab[0].getUserData();
+			invoke(controller[0], "startTailing", new Class<?>[] { state.getClass() }, state);
+			Tab other = readyTailTab(controller[0], model, path);
+			((TabPane) field(controller[0], "tabPane")).getSelectionModel().select(other);
+			assertEquals(1, ((TailScheduler) field(controller[0], "tailScheduler")).registrationCount());
+		});
+		Files.writeString(path, "\nnew", StandardOpenOption.APPEND);
+		awaitUi(() -> ((java.util.concurrent.atomic.AtomicReference<?>)
+				field(tab[0].getUserData(), "pendingUpdate")).get() != null);
+		fx(() -> {
+			Object state = tab[0].getUserData();
+			assertEquals(2, model.snapshot().lineCount(), "Polling remains independent of follow and selection");
+			assertEquals(1, ((VirtualLogList) field(state, "logItems")).size());
+			TabPane tabs = (TabPane) field(controller[0], "tabPane");
+			tabs.getSelectionModel().select(tab[0]);
+			assertEquals(2, ((LogListView) tab[0].getContent()).getItems().size());
+			assertFalse(((LogListView) tab[0].getContent()).followingProperty().get());
+			tabs.getTabs().remove(tab[0]);
+			assertEquals(0, ((TailScheduler) field(controller[0], "tailScheduler")).registrationCount());
+			controller[0].dispose();
+			assertEquals(0, ((TailScheduler) field(controller[0], "tailScheduler")).queuedJobs());
+		});
+	}
+
+	@Test
+	void inactiveTailPublicationsWaitForActivationAndKeepNewestSnapshot() throws Exception {
+		Path path = tempDir.resolve("inactive-tail.log");
+		Files.writeString(path, "original");
+		LogFileModel model = new LogFileModel(path);
+		MainController[] controller = new MainController[1];
+		Tab[] tab = new Tab[1];
+		AtomicInteger changes = new AtomicInteger();
+		fx(() -> {
+			controller[0] = openingController();
+			tab[0] = readyTailTab(controller[0], model, path);
+			VirtualLogList items = (VirtualLogList) field(tab[0].getUserData(), "logItems");
+			items.addListener((ListChangeListener<LogLine>) change -> {
+				boolean publication = false;
+				while (change.next())
+					publication |= !change.wasUpdated();
+				if (publication)
+					changes.incrementAndGet();
+			});
+			((LogListView) tab[0].getContent()).followingProperty().set(false);
+			TabPane tabs = (TabPane) field(controller[0], "tabPane");
+			Tab other = readyTailTab(controller[0], model, path);
+			tabs.getSelectionModel().select(other);
+		});
+		for (int i = 0; i < 3; i++) {
+			Files.writeString(path, "\nappend " + i, StandardOpenOption.APPEND);
+			model.updateIndex();
+			fx(() -> {
+				deliverTailUpdate(controller[0], tab[0].getUserData(), model.snapshot());
+				assertFalse(((java.util.concurrent.atomic.AtomicBoolean)
+						field(tab[0].getUserData(), "updateQueued")).get(), "No append callbacks for hidden tabs");
+			});
+			fx(() -> assertEquals(0, changes.get(), "Hidden lists must not publish append changes"));
+		}
+		fx(() -> {
+			VirtualLogList items = (VirtualLogList) field(tab[0].getUserData(), "logItems");
+			assertEquals(1, items.size());
+			((TabPane) field(controller[0], "tabPane")).getSelectionModel().select(tab[0]);
+			assertEquals(model.snapshot().version(), items.snapshot().version());
+			assertEquals(4, items.size());
+			assertEquals(1, changes.get(), "Activation publishes only the newest accumulated snapshot");
+			assertFalse(((LogListView) tab[0].getContent()).followingProperty().get());
+		});
+	}
+
+	private static void deliverTailUpdate(MainController controller, Object state, LogFileModel.Snapshot snapshot) {
+		invoke(controller, "acceptTailUpdate", new Class<?>[] { state.getClass(), LogFileModel.Snapshot.class },
+				state, snapshot);
+	}
+
+	@Test
+	void inactiveRewriteInvalidatesOccurrencesWithoutPublishingSourceList() throws Exception {
+		Path file = tempDir.resolve("inactive-occurrences.log");
+		Files.writeString(file, "ERROR old");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> search(ui));
+			workerFence(service);
+			fx(() -> drain(callbacks));
+			awaitUi(() -> occurrenceView(ui).getItems().getFirst().isAvailable());
+			long capturedVersion = ui.model().snapshot().version();
+			Files.writeString(file, "replacement");
+			ui.model().updateIndex();
+			fx(() -> {
+				Object state = ui.tabs().getTabs().getFirst().getUserData();
+				assertEquals(false, field(state, "active"));
+				deliverTailUpdate(ui.controller(), state, ui.model().snapshot());
+			});
+			fx(() -> {
+				assertEquals(capturedVersion, ui.items().snapshot().version());
+				assertTrue(occurrenceView(ui).getItems().getFirst().isReadError());
+			});
+		}
+	}
+
+	@Test
+	void hiddenRewriteRejectsHeldSearchResultBeforeSourcePublication() throws Exception {
+		Path file = tempDir.resolve("inactive-held-search.log");
+		Files.writeString(file, "ERROR old");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		try (var service = new ScanService(1, 8, callbacks::add)) {
+			ScanUi ui = scanUi(file, service);
+			fx(() -> search(ui));
+			workerFence(service);
+			Files.writeString(file, "replacement");
+			ui.model().updateIndex();
+			fx(() -> {
+				Object state = ui.tabs().getTabs().getFirst().getUserData();
+				deliverTailUpdate(ui.controller(), state, ui.model().snapshot());
+				drain(callbacks);
+				var layout = (javafx.scene.layout.VBox) ui.occurrences().getTabs().getFirst().getContent();
+				assertEquals("File changed during search. Click the highlight to search again.",
+						((Label) layout.getChildren().getFirst()).getText());
+				assertTrue(layout.getChildren().stream().noneMatch(LogListView.class::isInstance));
+			});
+		}
+	}
+
+	@Test
+	void queuedTailPublicationCannotUpdateClosedTab() throws Exception {
+		Path path = tempDir.resolve("closed-tail.log");
+		Files.writeString(path, "old");
+		LogFileModel model = new LogFileModel(path);
+		MainController[] controller = new MainController[1];
+		Tab[] tab = new Tab[1];
+		fx(() -> {
+			controller[0] = openingController();
+			tab[0] = readyTailTab(controller[0], model, path);
+		});
+		long initial = model.snapshot().version();
+		Files.writeString(path, "\nnew", StandardOpenOption.APPEND);
+		model.updateIndex();
+		fx(() -> {
+			Object state = tab[0].getUserData();
+			deliverTailUpdate(controller[0], state, model.snapshot());
+			((TabPane) field(controller[0], "tabPane")).getTabs().remove(tab[0]);
+			deliverTailUpdate(controller[0], state, model.snapshot());
+		});
+		fx(() -> {
+			Object state = tab[0].getUserData();
+			assertEquals(initial, ((VirtualLogList) field(state, "logItems")).snapshot().version());
+			assertNull(((java.util.concurrent.atomic.AtomicReference<?>) field(state, "pendingUpdate")).get());
+		});
+	}
+
+	private Tab readyTailTab(MainController controller, LogFileModel model, Path path) {
+		try {
+			Class<?> type = Class.forName(MainController.class.getName() + "$TabState");
+			var constructor = type.getDeclaredConstructors()[0];
+			constructor.setAccessible(true);
+			LogListView list = new LogListView();
+			VirtualLogList items = new VirtualLogList(model);
+			list.setItems(items);
+			Object state = constructor.newInstance(path.toFile(), "Default", model, items, list);
+			Tab tab = new Tab(path.getFileName().toString(), list);
+			tab.setUserData(state);
+			((TabPane) field(controller, "tabPane")).getTabs().add(tab);
+			return tab;
 		} catch (ReflectiveOperationException e) {
 			throw new AssertionError(e);
 		}

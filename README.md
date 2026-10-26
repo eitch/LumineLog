@@ -380,6 +380,44 @@ java -Xmx32m -cp target/classes:target/probes SpillableOccurrenceIndexProbe chun
 Set `-Djava.io.tmpdir=/path/to/disk-backed-temp` on the application/probe JVM to choose a different
 temporary filesystem. Safe cleanup only examines LumineLog-owned spill directories under that root.
 
+#### Adaptive shared tail polling (B09)
+
+File tabs share `TailScheduler`: **2 indexing workers, 8 queued jobs**, and one shared daemon
+dispatcher, rather than one timer thread per file. Each file has at most one queued/running update;
+callbacks count as in-flight work. Polling uses a monotonic clock and one next-due wakeup per scheduler,
+not a permanent fixed-rate dispatcher tick. Due-order admission prevents an actively changing file
+from repeatedly overtaking waiting files; saturated admission retries after **50 ms**, without
+running file I/O on the dispatcher or FX thread. Indexing is independent of Follow Tail.
+
+After a detected change, the next check is due in **50 ms**. Unchanged/error checks back off from
+**100 ms**, doubling to **2 seconds** for inactive files or **250 ms** for the selected file.
+Selection requests an immediate check, without overlapping existing work. These are scheduling
+intervals, not hard end-to-end detection deadlines: queueing, indexing and filesystem latency are
+additional. One blocked file leaves the other worker available; two blocked filesystem calls can
+occupy both workers. Cancellation is cooperative, not a filesystem timeout. Consecutive errors are
+logged once until a successful check resets error suppression. Closing a tab or shutting down removes
+queued work, interrupts indexing and suppresses late publication; shutdown does not await blocked I/O.
+
+Inactive tabs retain only the newest pending snapshot and defer list notifications, tail positioning,
+footer updates and highlight recounts until activation. Activation publishes that snapshot before
+updating the visible view, preserving the per-tab follow setting. Detected rewrites still invalidate
+occurrence results promptly even while their source tab is inactive; stale completed searches cannot
+attach replacement-file results. Appends leave captured occurrence results unchanged. Source offset
+indexes and published/retained snapshots remain outside the cache budgets. No filesystem watcher or
+animation-lifecycle changes are included; animation suspension remains B10.
+
+Reproducible **simulated operation-count evidence** from `TailSchedulerTest`: **50 idle readers** over
+`[0, 60000)` milliseconds, a manual clock advanced in 1 ms ticks, zero-duration reads and a bounded
+manual FIFO queue of 8 drained after each dispatch, with 50 ms saturation retries. The old 50 ms policy
+performs **60,000 checks (1,000/second)**; adaptive polling performs **1,700** with all files inactive or
+**1,905** with one selected file. This measures scheduler check counts, not real filesystem operations,
+OS wakeups, CPU usage or wall-clock speedups; it needs no storage fixture or special heap setting.
+Reproduce after compilation with:
+
+```bash
+mvn -Dtest=TailSchedulerTest test
+```
+
 ### Building a package
 
 ```bash

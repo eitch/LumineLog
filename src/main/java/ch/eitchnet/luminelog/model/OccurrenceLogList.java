@@ -101,8 +101,13 @@ public final class OccurrenceLogList extends ObservableListBase<LogLine> impleme
 	}
 
 	private void checkGeneration() {
+		invalidateIfGenerationChanged(live.snapshot().generation());
+	}
+
+	/** Invalidate captured results even while the hidden source list defers publication. */
+	public void invalidateIfGenerationChanged(long currentGeneration) {
 		checkOwner();
-		if (closed || unavailable || live.snapshot().generation() == generation)
+		if (closed || unavailable || currentGeneration == generation)
 			return;
 		unavailable = true;
 		source.close();
