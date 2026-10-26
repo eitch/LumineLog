@@ -442,6 +442,26 @@ tests cover zero height, reparenting, inactive tabs, window hiding, drag edges a
 mvn -Dtest=LogListViewTest test
 ```
 
+#### Cached regex compilation failures (B11)
+
+`HighlightRule` caches both successful and failed regex compilation across matching, occurrence
+counting and span lookup. Gson-loaded rules initialize this transient cache on first use. Changing
+the pattern or matching mode resets it; unchanged inputs and color-only edits do not. Invalid
+expressions still produce no matches, and cache state is not saved in configuration. Concurrent
+first use shares one compilation attempt; this does not establish immutable matching inputs during
+concurrent edits (B12) or bound Java regex execution time (B18).
+
+Measured operation-count evidence from `HighlightRuleTest`: for invalid expression `[` and input
+`error error`, 1,000 calls to each of the three matching operations previously caused **3,001**
+compilation attempts for a constructed rule (including construction), or **3,000** for a Gson-loaded
+rule. Both now make **one** attempt. The tests count calls at the actual regex compiler boundary;
+these are deterministic compilation counts, not measured allocation totals or timing speedups.
+Reproduce with:
+
+```bash
+mvn -Dtest=HighlightRuleTest test
+```
+
 ### Building a package
 
 ```bash

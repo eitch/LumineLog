@@ -16,13 +16,19 @@
  */
 package ch.eitchnet.luminelog.model;
 
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 public class HighlightRule {
 	private String pattern;
 	private transient Pattern compiledPattern;
+	private transient CompilationState compilationState = CompilationState.UNINITIALIZED;
 	private String color;
 	private boolean isRegex;
+
+	private enum CompilationState {
+		UNINITIALIZED, VALID, INVALID
+	}
 
 	public HighlightRule(String pattern, String color, boolean isRegex) {
 		this.pattern = pattern;
@@ -37,8 +43,12 @@ public class HighlightRule {
 		return pattern;
 	}
 
-	public void setPattern(String pattern) {
+	public synchronized void setPattern(String pattern) {
+		if (Objects.equals(this.pattern, pattern))
+			return;
 		this.pattern = pattern;
+		this.compiledPattern = null;
+		this.compilationState = CompilationState.UNINITIALIZED;
 		if (isRegex) {
 			compilePattern();
 		}
@@ -56,31 +66,41 @@ public class HighlightRule {
 		return isRegex;
 	}
 
-	public void setIsRegex(boolean isRegex) {
+	public synchronized void setIsRegex(boolean isRegex) {
+		if (this.isRegex == isRegex)
+			return;
 		this.isRegex = isRegex;
+		this.compiledPattern = null;
+		this.compilationState = CompilationState.UNINITIALIZED;
 		if (isRegex) {
 			compilePattern();
-		} else {
-			this.compiledPattern = null;
 		}
 	}
 
-	private void compilePattern() {
+	private synchronized Pattern compilePattern() {
+		// Gson may leave transient fields null when it bypasses the constructor.
+		if (compilationState == CompilationState.VALID || compilationState == CompilationState.INVALID)
+			return compiledPattern;
 		try {
-			this.compiledPattern = Pattern.compile(pattern);
+			this.compiledPattern = compileRegex(pattern);
+			this.compilationState = CompilationState.VALID;
 		} catch (Exception e) {
 			this.compiledPattern = null;
+			this.compilationState = CompilationState.INVALID;
 		}
+		return compiledPattern;
+	}
+
+	Pattern compileRegex(String expression) {
+		return Pattern.compile(expression);
 	}
 
 	public boolean matches(String line) {
 		if (isRegex) {
-			if (compiledPattern == null) {
-				compilePattern();
-			}
-			if (compiledPattern == null)
+			Pattern compiled = compilePattern();
+			if (compiled == null)
 				return false;
-			return compiledPattern.matcher(line).find();
+			return compiled.matcher(line).find();
 		} else {
 			return line.contains(pattern);
 		}
@@ -91,13 +111,11 @@ public class HighlightRule {
 			return 0;
 		}
 		if (isRegex) {
-			if (compiledPattern == null) {
-				compilePattern();
-			}
-			if (compiledPattern == null)
+			Pattern compiled = compilePattern();
+			if (compiled == null)
 				return 0;
 			int count = 0;
-			var matcher = compiledPattern.matcher(line);
+			var matcher = compiled.matcher(line);
 			while (matcher.find()) {
 				count++;
 			}
@@ -120,12 +138,10 @@ public class HighlightRule {
 			return matches;
 		}
 		if (isRegex) {
-			if (compiledPattern == null) {
-				compilePattern();
-			}
-			if (compiledPattern == null)
+			Pattern compiled = compilePattern();
+			if (compiled == null)
 				return matches;
-			var matcher = compiledPattern.matcher(line);
+			var matcher = compiled.matcher(line);
 			while (matcher.find()) {
 				matches.add(new MatchRange(matcher.start(), matcher.end()));
 			}
