@@ -403,8 +403,8 @@ footer updates and highlight recounts until activation. Activation publishes tha
 updating the visible view, preserving the per-tab follow setting. Detected rewrites still invalidate
 occurrence results promptly even while their source tab is inactive; stale completed searches cannot
 attach replacement-file results. Appends leave captured occurrence results unchanged. Source offset
-indexes and published/retained snapshots remain outside the cache budgets. No filesystem watcher or
-animation-lifecycle changes are included; animation suspension remains B10.
+indexes and published/retained snapshots remain outside the cache budgets. No filesystem watcher is
+included; view animation eligibility is handled separately below.
 
 Reproducible **simulated operation-count evidence** from `TailSchedulerTest`: **50 idle readers** over
 `[0, 60000)` milliseconds, a manual clock advanced in 1 ms ticks, zero-duration reads and a bounded
@@ -416,6 +416,30 @@ Reproduce after compilation with:
 
 ```bash
 mvn -Dtest=TailSchedulerTest test
+```
+
+#### Eligible-only view animation (B10)
+
+`LogListView` starts its animation timer only for runnable tail positioning or edge-drag scrolling.
+Pending tail positioning waits while a view is hidden (including hidden ancestors/inactive tabs),
+detached, zero-height, in a hidden/minimized window, or pressed. Visibility, attachment, window,
+layout and mouse-release changes resume eligible work without changing Follow Tail. Tail positioning
+still uses two layout pulses. Interior dragging, reaching the first/last row, cancelling a gesture,
+disabling follow without drag work, and disposing the view stop the timer immediately. Edge scrolling
+retains its 16-pixel margin and 60 ms interval; selection is unchanged while animation is suspended.
+Disposal removes ancestor/window observers and prevents later events from restarting animation.
+
+Measured callback evidence from JavaFX interaction regressions: one 100-row, 500 × 300 view,
+JavaFX **23.0.2**, Azul OpenJDK **27+35**, Linux x86-64, default Maven test JVM heap settings and
+in-memory rows (no storage fixture). Over each **150 ms pulse window**, the pre-fix implementation
+received **11 callbacks while hidden**, **2 with a hidden ancestor**, and **10 while pressed**.
+The same tests after the fix receive **zero** in each suspended state, then verify that tail work
+finishes after visibility/release. Counts vary with pulse timing; these are observed callback counts,
+not measured CPU savings, OS wakeups or a guarantee that JavaFX itself stops pulsing. Additional
+tests cover zero height, reparenting, inactive tabs, window hiding, drag edges and disposal. Reproduce:
+
+```bash
+mvn -Dtest=LogListViewTest test
 ```
 
 ### Building a package

@@ -19,6 +19,8 @@ package ch.eitchnet.luminelog.controller;
 import ch.eitchnet.luminelog.model.LogLine;
 import javafx.animation.AnimationTimer;
 import javafx.application.Platform;
+import javafx.beans.InvalidationListener;
+import javafx.beans.Observable;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.SimpleBooleanProperty;
 import javafx.collections.ListChangeListener;
@@ -34,10 +36,21 @@ import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
+import javafx.stage.Stage;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class LogListView extends ListView<LogLine> {
 
+	private static final int TAIL_LAYOUT_PULSES = 2;
+	private static final double DRAG_EDGE_PIXELS = 16;
+	private static final long DRAG_SCROLL_NANOS = 60_000_000L;
 	private final BooleanProperty following = new SimpleBooleanProperty(true);
+	private final List<Observable> eligibilityObservables = new ArrayList<>();
+	private final InvalidationListener eligibilityChanged = _ -> observeEligibility();
+	private boolean disposed;
+	private boolean animationRunning;
 	private boolean pressed;
 	private boolean dragging;
 	private boolean scrollbarGesture;
@@ -45,6 +58,7 @@ public class LogListView extends ListView<LogLine> {
 	private int endpoint = -1;
 	private double pointerY;
 	private int tailPulses;
+	private long animationCallbacks;
 	private long lastDragScroll;
 	private int pendingSelection = -1;
 	private final ListChangeListener<LogLine> loadedLines = change -> {
@@ -53,23 +67,28 @@ public class LogListView extends ListView<LogLine> {
 				pendingSelection = -1;
 		}
 		selectPendingLine();
+		updateAnimationState();
 	};
 	private final AnimationTimer animation = new AnimationTimer() {
 		@Override
 		public void handle(long now) {
-			if (dragging && now - lastDragScroll > 60_000_000L) {
+			animationCallbacks++;
+			if (!canAnimate()) {
+				updateAnimationState();
+				return;
+			}
+			if (hasRunnableDrag() && now - lastDragScroll > DRAG_SCROLL_NANOS) {
 				lastDragScroll = now;
 				autoScroll();
 			}
-			if (tailPulses > 0 && following.get() && !pressed && getHeight() > 0 && isVisible()) {
+			if (hasRunnableTail()) {
 				applyCss();
 				layout();
 				if (!getItems().isEmpty())
 					scrollTo(getItems().size() - 1);
 				tailPulses--;
 			}
-			if (!dragging && (tailPulses == 0 || !following.get()))
-				stop();
+			updateAnimationState();
 		}
 	};
 
@@ -83,19 +102,18 @@ public class LogListView extends ListView<LogLine> {
 				oldItems.removeListener(loadedLines);
 			if (newItems != null)
 				newItems.addListener(loadedLines);
+			updateAnimationState();
 		});
 		widthProperty().addListener((_, _, _) -> requestTail());
 		heightProperty().addListener((_, _, _) -> requestTail());
 		following.addListener((_, _, enabled) -> {
 			if (enabled)
 				requestTail();
-		});
-		sceneProperty().addListener((_, _, scene) -> {
-			if (scene == null)
-				animation.stop();
 			else
-				requestTail();
+				updateAnimationState();
 		});
+		sceneProperty().addListener((_, _, _) -> observeEligibility());
+		observeEligibility();
 		addEventFilter(ScrollEvent.SCROLL, event -> {
 			pendingSelection = -1;
 			if (event.getDeltaY() > 0)
@@ -131,17 +149,76 @@ public class LogListView extends ListView<LogLine> {
 	}
 
 	public void requestTail() {
-		if (following.get()) {
-			tailPulses = 2;
-			if (getScene() != null)
-				animation.start();
+		if (!disposed && following.get())
+			tailPulses = TAIL_LAYOUT_PULSES;
+		updateAnimationState();
+	}
+
+	private void observeEligibility() {
+		for (Observable observable : eligibilityObservables)
+			observable.removeListener(eligibilityChanged);
+		eligibilityObservables.clear();
+		if (disposed)
+			return;
+		for (Node node = this; node != null; node = node.getParent()) {
+			observe(node.visibleProperty());
+			observe(node.parentProperty());
 		}
+		if (getScene() != null) {
+			observe(getScene().windowProperty());
+			if (getScene().getWindow() != null) {
+				observe(getScene().getWindow().showingProperty());
+				if (getScene().getWindow() instanceof Stage stage)
+					observe(stage.iconifiedProperty());
+			}
+		}
+		requestTail();
+	}
+
+	private void observe(Observable observable) {
+		eligibilityObservables.add(observable);
+		observable.addListener(eligibilityChanged);
+	}
+
+	private boolean canAnimate() {
+		if (disposed || getHeight() <= 0 || getScene() == null || getScene().getWindow() == null
+				|| !getScene().getWindow().isShowing()
+				|| getScene().getWindow() instanceof Stage stage && stage.isIconified())
+			return false;
+		for (Node node = this; node != null; node = node.getParent()) {
+			if (!node.isVisible())
+				return false;
+		}
+		return true;
+	}
+
+	private boolean hasRunnableTail() {
+		return tailPulses > 0 && following.get() && !pressed && !getItems().isEmpty();
+	}
+
+	private boolean hasRunnableDrag() {
+		return dragging && !getItems().isEmpty()
+				&& (pointerY < DRAG_EDGE_PIXELS && endpoint > 0
+				|| pointerY > getHeight() - DRAG_EDGE_PIXELS && endpoint < getItems().size() - 1);
+	}
+
+	private void updateAnimationState() {
+		boolean runnable = canAnimate() && (hasRunnableDrag() || hasRunnableTail());
+		if (runnable == animationRunning)
+			return;
+		animationRunning = runnable;
+		if (runnable)
+			animation.start();
+		else
+			animation.stop();
 	}
 
 	public void dispose() {
+		disposed = true;
+		tailPulses = 0;
 		pendingSelection = -1;
 		cancelSelectionGesture();
-		animation.stop();
+		observeEligibility();
 	}
 
 	public void cancelSelectionGesture() {
@@ -149,10 +226,11 @@ public class LogListView extends ListView<LogLine> {
 		dragging = false;
 		anchor = -1;
 		endpoint = -1;
+		updateAnimationState();
 	}
 
 	private void resumeAtBottom() {
-		if (dragging)
+		if (disposed || dragging)
 			return;
 		applyCss();
 		layout();
@@ -187,6 +265,7 @@ public class LogListView extends ListView<LogLine> {
 			anchor = event.isShiftDown() && getFocusModel().getFocusedIndex() >= 0
 					? getFocusModel().getFocusedIndex() : cell.getIndex();
 			endpoint = -1;
+			updateAnimationState();
 		}
 	}
 
@@ -218,7 +297,7 @@ public class LogListView extends ListView<LogLine> {
 		following.set(false);
 		pointerY = sceneToLocal(event.getSceneX(), event.getSceneY()).getY();
 		selectTo(indexAt(pointerY));
-		animation.start();
+		updateAnimationState();
 		event.consume();
 	}
 
@@ -265,12 +344,12 @@ public class LogListView extends ListView<LogLine> {
 	}
 
 	private void autoScroll() {
-		if (pointerY >= 16 && pointerY <= getHeight() - 16)
+		if (pointerY >= DRAG_EDGE_PIXELS && pointerY <= getHeight() - DRAG_EDGE_PIXELS)
 			return;
-		int edge = indexAt(pointerY < 16 ? 0 : getHeight());
+		int edge = indexAt(pointerY < DRAG_EDGE_PIXELS ? 0 : getHeight());
 		if (edge < 0)
 			return;
-		int next = Math.clamp(edge + (pointerY < 16 ? -1 : 1), 0, getItems().size() - 1);
+		int next = Math.clamp(edge + (pointerY < DRAG_EDGE_PIXELS ? -1 : 1), 0, getItems().size() - 1);
 		scrollTo(next);
 		selectTo(next);
 	}

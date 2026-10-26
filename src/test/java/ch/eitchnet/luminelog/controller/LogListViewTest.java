@@ -209,6 +209,226 @@ class LogListViewTest {
 	}
 
 	@Test
+	void hiddenTailAnimationHasNoCallbacksAndResumesOnVisibility() throws Exception {
+		show();
+		fx(() -> {
+			view.setVisible(false);
+			view.getItems().add(new LogLine(101, "hidden append"));
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> view.setVisible(true));
+		pulses();
+		fx(() -> {
+			assertEquals(0, field(view, "tailPulses"));
+			ScrollBar bar = (ScrollBar) view.lookup(".scroll-bar:vertical");
+			assertEquals(bar.getMax(), bar.getValue(), 0.0001);
+			assertTrue(view.followingProperty().get());
+		});
+		assertAnimationSuspended();
+	}
+
+	@Test
+	void ancestorHiddenTailAnimationHasNoCallbacks() throws Exception {
+		show();
+		fx(() -> {
+			view.getParent().setVisible(false);
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> view.getParent().setVisible(true));
+		pulses();
+		fx(() -> assertEquals(0, field(view, "tailPulses")));
+	}
+
+	@Test
+	void pressedTailAnimationWaitsForRelease() throws Exception {
+		show();
+		fx(() -> {
+			mouse(cell(95), MouseEvent.MOUSE_PRESSED);
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> mouse(cell(95), MouseEvent.MOUSE_RELEASED));
+		pulses();
+		fx(() -> {
+			assertEquals(0, field(view, "tailPulses"));
+			assertTrue(view.followingProperty().get());
+		});
+	}
+
+	private void assertAnimationSuspended() throws Exception {
+		long[] before = new long[1];
+		fx(() -> before[0] = (long) field(view, "animationCallbacks"));
+		pulses();
+		fx(() -> assertEquals(before[0], field(view, "animationCallbacks"),
+				"Ineligible views must receive no animation callbacks"));
+	}
+
+	@Test
+	void emptyViewWaitsForItemsWithoutAnimationCallbacks() throws Exception {
+		show();
+		fx(() -> {
+			view.getItems().clear();
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> {
+			view.getItems().add(new LogLine(1, "first line"));
+			assertTrue((boolean) field(view, "animationRunning"));
+		});
+		pulses();
+		fx(() -> assertEquals(0, field(view, "tailPulses")));
+		assertAnimationSuspended();
+	}
+
+	@Test
+	void zeroHeightTailAnimationResumesAfterLayout() throws Exception {
+		show();
+		fx(() -> {
+			view.setManaged(false);
+			view.resize(500, 0);
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> {
+			assertEquals(2, field(view, "tailPulses"));
+			view.resize(500, 300);
+		});
+		pulses();
+		fx(() -> assertEquals(0, field(view, "tailPulses")));
+	}
+
+	@Test
+	void detachedTailAnimationResumesUnderNewAncestors() throws Exception {
+		show();
+		fx(() -> {
+			((StackPane) stage.getScene().getRoot()).getChildren().clear();
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> {
+			StackPane wrapper = new StackPane(view);
+			wrapper.setVisible(false);
+			((StackPane) stage.getScene().getRoot()).getChildren().add(wrapper);
+		});
+		assertAnimationSuspended();
+		fx(() -> view.getParent().setVisible(true));
+		pulses();
+		fx(() -> assertEquals(0, field(view, "tailPulses")));
+	}
+
+	@Test
+	void hiddenWindowTailAnimationResumesOnShow() throws Exception {
+		show();
+		fx(() -> {
+			stage.hide();
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> stage.show());
+		pulses();
+		fx(() -> assertEquals(0, field(view, "tailPulses")));
+	}
+
+	@Test
+	void inactiveTabTailAnimationWaitsForActivation() throws Exception {
+		show();
+		Tab[] logTab = new Tab[1];
+		fx(() -> {
+			((StackPane) stage.getScene().getRoot()).getChildren().clear();
+			logTab[0] = new Tab("Log", new StackPane(view));
+			TabPane tabs = new TabPane(logTab[0], new Tab("Other", new Label("Other")));
+			((StackPane) stage.getScene().getRoot()).getChildren().add(tabs);
+			tabs.getSelectionModel().select(1);
+			view.getItems().add(new LogLine(101, "inactive append"));
+			view.requestTail();
+		});
+		assertAnimationSuspended();
+		fx(() -> logTab[0].getTabPane().getSelectionModel().select(logTab[0]));
+		pulses();
+		fx(() -> {
+			assertEquals(0, field(view, "tailPulses"));
+			ScrollBar bar = (ScrollBar) view.lookup(".scroll-bar:vertical");
+			assertEquals(bar.getMax(), bar.getValue(), 0.0001);
+		});
+	}
+
+	@Test
+	void dragAnimationRunsOnlyAtRunnableEdgesAndCancelsImmediately() throws Exception {
+		show();
+		fx(() -> {
+			view.followingProperty().set(false);
+			view.scrollTo(0);
+		});
+		pulses();
+		fx(() -> {
+			mouse(cell(1), MouseEvent.MOUSE_PRESSED);
+			mouse(cell(4), MouseEvent.MOUSE_DRAGGED);
+			assertFalse((boolean) field(view, "animationRunning"), "Interior dragging has no periodic work");
+		});
+		assertAnimationSuspended();
+		fx(() -> {
+			dragAt(view.getHeight() + 20);
+			assertTrue((boolean) field(view, "animationRunning"));
+			view.setVisible(false);
+		});
+		var selection = new java.util.ArrayList<Integer>();
+		fx(() -> selection.addAll(view.getSelectionModel().getSelectedIndices()));
+		assertAnimationSuspended();
+		fx(() -> {
+			assertEquals(selection, view.getSelectionModel().getSelectedIndices());
+			view.setVisible(true);
+			assertTrue((boolean) field(view, "animationRunning"));
+			view.cancelSelectionGesture();
+			assertFalse((boolean) field(view, "animationRunning"));
+			assertEquals(selection, view.getSelectionModel().getSelectedIndices());
+		});
+		assertAnimationSuspended();
+		fx(() -> {
+			view.scrollTo(0);
+			view.layout();
+			mouse(cell(1), MouseEvent.MOUSE_PRESSED);
+			dragAt(-20);
+			assertEquals(0, view.getSelectionModel().getSelectedIndices().getFirst());
+			assertFalse((boolean) field(view, "animationRunning"), "Cannot scroll beyond the first row");
+		});
+		assertAnimationSuspended();
+	}
+
+	private void dragAt(double y) {
+		var point = view.localToScene(20, y);
+		view.fireEvent(new MouseEvent(MouseEvent.MOUSE_DRAGGED, point.getX(), point.getY(),
+				point.getX(), point.getY(), MouseButton.PRIMARY, 1, false, false, false, false,
+				true, false, false, false, false, false, new PickResult(view, 20, y)));
+	}
+
+	@Test
+	void followDisabledAndDisposedViewsCannotRestartAnimation() throws Exception {
+		show();
+		fx(() -> {
+			view.requestTail();
+			view.followingProperty().set(false);
+			assertFalse((boolean) field(view, "animationRunning"));
+		});
+		assertAnimationSuspended();
+		fx(() -> {
+			view.followingProperty().set(true);
+			assertTrue((boolean) field(view, "animationRunning"));
+			view.dispose();
+			view.requestTail();
+			view.setVisible(false);
+			view.setVisible(true);
+			view.followingProperty().set(false);
+			view.followingProperty().set(true);
+			view.resize(400, 200);
+			assertFalse((boolean) field(view, "animationRunning"));
+			assertTrue(((java.util.List<?>) field(view, "eligibilityObservables")).isEmpty());
+		});
+		assertAnimationSuspended();
+	}
+
+	@Test
 	void layoutAndAppendsDoNotDisableFollowButUserNavigationDoes() throws Exception {
 		show();
 		fx(() -> {
