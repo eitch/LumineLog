@@ -16,5 +16,17 @@
  */
 package ch.eitchnet.luminelog.model;
 
-public record LogLine(int lineNumber, String content) {
+public record LogLine(int lineNumber, String content, String errorMessage) {
+
+	public LogLine(int lineNumber, String content) {
+		this(lineNumber, content, null);
+	}
+
+	public static LogLine readError(int lineNumber, String message) {
+		return new LogLine(lineNumber, "", java.util.Objects.requireNonNull(message));
+	}
+
+	public boolean isReadError() {
+		return errorMessage != null;
+	}
 }

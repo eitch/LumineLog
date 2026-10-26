@@ -32,6 +32,13 @@ import java.util.Objects;
 
 public class LogFileModel {
 
+	/** Encoded line limit, including any CR/LF terminators. */
+	public static final int MAX_ENCODED_LINE_BYTES = 1024 * 1024;
+	/** UTF-8 decoding produces at most one UTF-16 code unit per encoded byte. */
+	public static final int MAX_DECODED_LINE_CHARS = MAX_ENCODED_LINE_BYTES;
+	public static final int MAX_BATCH_BYTES = 1024 * 1024;
+	public static final int MAX_BATCH_LINES = 1000;
+
 	private final Path filePath;
 	private Snapshot current;
 	private final ByteBuffer indexSearchBuffer = ByteBuffer.allocateDirect(16384);
@@ -139,6 +146,25 @@ public class LogFileModel {
 		return current.readBatch(startLine);
 	}
 
+	public static final class OversizedLineException extends IOException {
+		private final int lineNumber;
+		private final long byteLength;
+		private final int limit;
+
+		private OversizedLineException(Path filePath, int lineNumber, long byteLength, int limit) {
+			super("Line " + ((long) lineNumber + 1) + " in " + filePath + " is " + byteLength
+					+ " encoded bytes; limit is " + limit + " bytes including CR/LF. Split the line before reading.");
+			this.lineNumber = lineNumber;
+			this.byteLength = byteLength;
+			this.limit = limit;
+		}
+
+		/** Zero-based line index, consistent with readBatch and getLine. */
+		public int lineNumber() { return lineNumber; }
+		public long byteLength() { return byteLength; }
+		public int limit() { return limit; }
+	}
+
 	/** Stable index boundaries, not a historical copy of the underlying file contents. */
 	public static final class Snapshot {
 		private final Path filePath;
@@ -186,18 +212,26 @@ public class LogFileModel {
 			long startOffset = offsets.get(startLine);
 			int endLine = startLine;
 			long endOffset = startOffset;
-			while (endLine < lineCount() && endLine - startLine < 1000) {
+			while (endLine < lineCount() && endLine - startLine < MAX_BATCH_LINES) {
 				long nextEnd = endOffset(endLine);
-				if (nextEnd - startOffset > 1024 * 1024 && endLine > startLine)
+				long lineBytes = nextEnd - endOffset;
+				if (lineBytes < 0 || nextEnd > fileSize)
+					throw new IOException("Invalid snapshot boundaries for " + filePath);
+				if (lineBytes > MAX_ENCODED_LINE_BYTES) {
+					if (endLine == startLine)
+						throw new OversizedLineException(filePath, endLine, lineBytes, MAX_ENCODED_LINE_BYTES);
+					break;
+				}
+				if (nextEnd - startOffset > MAX_BATCH_BYTES)
 					break;
 				endOffset = nextEnd;
 				endLine++;
-				if (endOffset - startOffset >= 1024 * 1024)
+				if (endOffset - startOffset >= MAX_BATCH_BYTES)
 					break;
 			}
 			long totalBytesToRead = endOffset - startOffset;
-			if (totalBytesToRead < 0 || totalBytesToRead > Integer.MAX_VALUE - 8)
-				throw new IOException("Line too large to decode in " + filePath);
+			if (totalBytesToRead < 0 || totalBytesToRead > MAX_BATCH_BYTES)
+				throw new IOException("Batch exceeds read limit in " + filePath);
 			byte[] bytes = new byte[(int) totalBytesToRead];
 			try (RandomAccessFile raf = new RandomAccessFile(filePath.toFile(), "r")) {
 				validate(raf);
@@ -226,7 +260,8 @@ public class LogFileModel {
 		private final List<String> lines;
 
 		public Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead) {
-			this(bytes, startLine, endLine, startOffset, totalBytesToRead, decodeLines(bytes, endLine - startLine));
+			this(bytes, startLine, endLine, startOffset, totalBytesToRead,
+					decodeLines(bytes, (long) endLine - startLine, totalBytesToRead));
 		}
 
 		private Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead,
@@ -239,7 +274,13 @@ public class LogFileModel {
 			this.lines = List.copyOf(lines);
 		}
 
-		private static List<String> decodeLines(byte[] bytes, int count) {
+		private static List<String> decodeLines(byte[] bytes, long count, long totalBytesToRead) {
+			if (bytes.length > MAX_BATCH_BYTES || bytes.length > MAX_ENCODED_LINE_BYTES
+					|| totalBytesToRead != bytes.length)
+				throw new IllegalArgumentException("Batch must contain at most " + MAX_BATCH_BYTES
+						+ " encoded bytes and totalBytesToRead must match bytes.length");
+			if (count < 0 || count > MAX_BATCH_LINES)
+				throw new IllegalArgumentException("Batch must contain between 0 and " + MAX_BATCH_LINES + " lines");
 			List<String> decoded = new ArrayList<>();
 			int start = 0;
 			for (int line = 0; line < count; line++) {

@@ -22,6 +22,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
@@ -41,6 +43,147 @@ public class LogFileModelTest {
 	private static final Logger log = LoggerFactory.getLogger(LogFileModelTest.class);
 	@TempDir
 	Path tempDir;
+
+	@Test
+	public void testOversizedLineRejectedBeforePayloadRead() throws IOException {
+		Path logFile = tempDir.resolve("oversized.log");
+		try (RandomAccessFile file = new RandomAccessFile(logFile.toFile(), "rw")) {
+			file.setLength(LogFileModel.MAX_ENCODED_LINE_BYTES + 1);
+		}
+		LogFileModel model = new LogFileModel(logFile);
+		assertEquals(1, model.getLineCount());
+		LogFileModel.OversizedLineException failure = assertThrows(LogFileModel.OversizedLineException.class,
+				() -> model.snapshot().readBatch(0));
+		assertEquals(0, failure.lineNumber());
+		assertEquals(LogFileModel.MAX_ENCODED_LINE_BYTES + 1, failure.byteLength());
+		assertEquals(LogFileModel.MAX_ENCODED_LINE_BYTES, failure.limit());
+		assertTrue(failure.getMessage().contains(logFile.toString()));
+		assertTrue(failure.getMessage().contains("including CR/LF"));
+		assertThrows(LogFileModel.OversizedLineException.class, () -> model.readBatch(0));
+		assertThrows(LogFileModel.OversizedLineException.class, () -> model.getLine(0));
+	}
+
+	@Test
+	public void testNormalRowsBeforeAndAfterOversizedLineRemainReadable() throws IOException {
+		Path logFile = tempDir.resolve("mixed-oversized.log");
+		try (RandomAccessFile file = new RandomAccessFile(logFile.toFile(), "rw")) {
+			file.writeBytes("before\n");
+			file.seek(file.getFilePointer() + LogFileModel.MAX_ENCODED_LINE_BYTES);
+			file.writeBytes("\nafter\n");
+		}
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Batch first = model.readBatch(0);
+		assertEquals(List.of("before"), first.getLines());
+		assertEquals(1, first.endLine());
+		assertEquals(7, first.totalBytesToRead());
+		assertEquals("before", model.getLine(0));
+		LogFileModel.OversizedLineException failure = assertThrows(LogFileModel.OversizedLineException.class,
+				() -> model.readBatch(1));
+		assertEquals(1, failure.lineNumber());
+		assertEquals(LogFileModel.MAX_ENCODED_LINE_BYTES + 1, failure.byteLength());
+		assertEquals(List.of("after", ""), model.readBatch(2).getLines());
+		List<String> processed = new ArrayList<>();
+		assertThrows(LogFileModel.OversizedLineException.class, () -> model.iterateLines((line, _) -> {
+			processed.add(line);
+			return true;
+		}));
+		assertEquals(List.of("before"), processed);
+	}
+
+	@Test
+	public void testUtf8EncodedBoundaryIncludesLineTerminators() throws IOException {
+		Path logFile = tempDir.resolve("utf8-boundary.log");
+		int limit = LogFileModel.MAX_ENCODED_LINE_BYTES;
+		for (String terminator : List.of("", "\n", "\r\n")) {
+			for (int size : List.of(limit - 1, limit, limit + 1)) {
+				int payloadBytes = size - terminator.length();
+				String content = "€😀".repeat(payloadBytes / 7) + "x".repeat(payloadBytes % 7);
+				Files.writeString(logFile, content + terminator, StandardCharsets.UTF_8);
+				assertEquals(size, Files.size(logFile));
+				LogFileModel model = new LogFileModel(logFile);
+				if (size > limit) {
+					LogFileModel.OversizedLineException failure = assertThrows(LogFileModel.OversizedLineException.class,
+							() -> model.readBatch(0));
+					assertEquals(size, failure.byteLength());
+				} else {
+					LogFileModel.Batch batch = model.readBatch(0);
+					assertEquals(content, batch.getLines().getFirst());
+					assertTrue(content.length() <= LogFileModel.MAX_DECODED_LINE_CHARS);
+					assertTrue(batch.bytes().length <= LogFileModel.MAX_BATCH_BYTES);
+				}
+				if (!terminator.isEmpty())
+					assertEquals(List.of(""), model.readBatch(1).getLines());
+			}
+		}
+	}
+
+	@Test
+	public void testAsciiAndMalformedUtf8DecodedCharBoundary() throws IOException {
+		Path logFile = tempDir.resolve("decoded-boundary.log");
+		byte[] bytes = new byte[LogFileModel.MAX_ENCODED_LINE_BYTES];
+		for (byte value : new byte[]{'a', (byte) 0xff}) {
+			java.util.Arrays.fill(bytes, value);
+			Files.write(logFile, bytes);
+			String decoded = new LogFileModel(logFile).getLine(0);
+			assertEquals(LogFileModel.MAX_DECODED_LINE_CHARS, decoded.length());
+			assertEquals(value == 'a' ? 'a' : '\ufffd', decoded.charAt(decoded.length() - 1));
+		}
+	}
+
+	@Test
+	public void testEmptyCrLfAndTrailingNewlineRows() throws IOException {
+		Path logFile = tempDir.resolve("empty-rows.log");
+		Files.writeString(logFile, "");
+		assertEquals(List.of(""), new LogFileModel(logFile).readBatch(0).getLines());
+		Files.writeString(logFile, "\r\n\n€😀\r\n");
+		assertEquals(List.of("", "", "€😀", ""), new LogFileModel(logFile).readBatch(0).getLines());
+	}
+
+	@Test
+	public void testBatchByteAndRowBudgets() throws IOException {
+		Path logFile = tempDir.resolve("batch-boundary.log");
+		String halfBatchLine = "a".repeat(LogFileModel.MAX_BATCH_BYTES / 2 - 1) + "\n";
+		Files.writeString(logFile, halfBatchLine.repeat(2) + "tail");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Batch first = model.readBatch(0);
+		assertEquals(2, first.endLine());
+		assertEquals(LogFileModel.MAX_BATCH_BYTES, first.totalBytesToRead());
+		assertEquals(List.of("tail"), model.readBatch(2).getLines());
+		Files.writeString(logFile, "x" + halfBatchLine + halfBatchLine);
+		model.updateIndex();
+		assertEquals(1, model.readBatch(0).endLine());
+		assertEquals(halfBatchLine.length() + 1, model.readBatch(0).totalBytesToRead());
+		assertEquals(halfBatchLine.substring(0, halfBatchLine.length() - 1), model.getLine(1));
+		Files.writeString(logFile, "\n".repeat(LogFileModel.MAX_BATCH_LINES));
+		model.updateIndex();
+		assertEquals(LogFileModel.MAX_BATCH_LINES, model.readBatch(0).getLines().size());
+		assertEquals(List.of(""), model.readBatch(LogFileModel.MAX_BATCH_LINES).getLines());
+	}
+
+	@Test
+	public void testPublicBatchConstructorGuardsBeforeDecodeAndRetainsCloning() {
+		byte[] oversized = new byte[LogFileModel.MAX_BATCH_BYTES + 1];
+		assertThrows(IllegalArgumentException.class,
+				() -> new LogFileModel.Batch(oversized, 0, 1, 0, oversized.length));
+		assertThrows(IllegalArgumentException.class,
+				() -> new LogFileModel.Batch(new byte[0], 0, LogFileModel.MAX_BATCH_LINES + 1, 0, 0));
+		assertThrows(IllegalArgumentException.class,
+				() -> new LogFileModel.Batch(new byte[0], Integer.MIN_VALUE, Integer.MAX_VALUE, 0, 0));
+		assertThrows(IllegalArgumentException.class,
+				() -> new LogFileModel.Batch(new byte[0], 1, 0, 0, 0));
+		assertThrows(IllegalArgumentException.class,
+				() -> new LogFileModel.Batch(new byte[0], 0, 1, 0, LogFileModel.MAX_BATCH_BYTES + 1));
+		byte[] bytes = "é\r\n".getBytes(StandardCharsets.UTF_8);
+		LogFileModel.Batch batch = new LogFileModel.Batch(bytes, 0, 2, 0, bytes.length);
+		bytes[0] = 0;
+		batch.bytes()[0] = 0;
+		assertNotEquals(0, batch.bytes()[0]);
+		assertEquals(List.of("é", ""), batch.getLines());
+		assertThrows(UnsupportedOperationException.class, () -> batch.getLines().add("changed"));
+		byte[] boundary = new byte[LogFileModel.MAX_BATCH_BYTES];
+		assertEquals(LogFileModel.MAX_DECODED_LINE_CHARS,
+				new LogFileModel.Batch(boundary, 0, 1, 0, boundary.length).getLines().getFirst().length());
+	}
 
 	@Test
 	public void testIndexingAndTailing() throws IOException {

@@ -33,6 +33,26 @@ public class VirtualLogListTest {
 	Path tempDir;
 
 	@Test
+	public void readFailureIsNotLogContentAndRewriteClearsIt() throws IOException {
+		Path file = tempDir.resolve("oversized.log");
+		try (java.io.RandomAccessFile output = new java.io.RandomAccessFile(file.toFile(), "rw")) {
+			output.setLength(2 * 1024 * 1024);
+		}
+		LogFileModel model = new LogFileModel(file);
+		VirtualLogList list = new VirtualLogList(model);
+		LogLine error = list.get(0);
+		assertTrue(error.isReadError());
+		assertEquals("", error.content());
+		assertTrue(error.errorMessage().contains("1048576"));
+		org.junit.jupiter.api.Assertions.assertSame(error, list.get(0));
+		Files.writeString(file, "readable");
+		model.updateIndex();
+		list.publish(model.snapshot());
+		org.junit.jupiter.api.Assertions.assertFalse(list.get(0).isReadError());
+		assertEquals("readable", list.get(0).content());
+	}
+
+	@Test
 	public void backgroundIndexMustNotChangePublishedSize() throws IOException {
 		Path file = tempDir.resolve("publication.log");
 		Files.writeString(file, "first");

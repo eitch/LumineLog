@@ -58,7 +58,10 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 			try {
 				currentBatch = snapshot.readBatch(index);
 			} catch (IOException e) {
-				return new LogLine(index + 1, "ERROR READING BATCH AT " + index + ": " + e.getMessage());
+				LogLine error = LogLine.readError(index + 1, e.getMessage());
+				if (e instanceof LogFileModel.OversizedLineException)
+					cache.put(index, error);
+				return error;
 			}
 		}
 
@@ -114,7 +117,7 @@ public class VirtualLogList extends ObservableListBase<LogLine> {
 						try {
 							return new LogLine(index + 1, previous.readBatch(index).getLines().getFirst());
 						} catch (IOException e) {
-							return new LogLine(index + 1, "ERROR READING REMOVED LINE: " + e.getMessage());
+							return LogLine.readError(index + 1, e.getMessage());
 						}
 					}
 				};

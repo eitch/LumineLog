@@ -652,19 +652,30 @@ public class MainController {
 		clipboard.setContent(content);
 	}
 
+	static String selectedText(List<LogLine> selected) {
+		for (LogLine line : selected) {
+			if (line.isReadError())
+				throw new IllegalStateException("Cannot copy selection: line " + line.lineNumber()
+						+ " is unavailable. " + line.errorMessage());
+		}
+		return selected.stream().map(LogLine::content).collect(Collectors.joining(System.lineSeparator()));
+	}
+
+	private void copySelectedLines(ListView<LogLine> listView) {
+		List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
+		if (selected == null || selected.isEmpty())
+			return;
+		try {
+			copyToClipboard(selectedText(selected));
+		} catch (IllegalStateException e) {
+			DialogUtil.showError(e.getMessage());
+		}
+	}
+
 	private void setupCopyContextMenu(ListView<LogLine> listView) {
 		ContextMenu contextMenu = new ContextMenu();
 		MenuItem copyItem = new MenuItem("Copy Selected Lines");
-		copyItem.setOnAction(_ -> {
-			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
-			if (selected != null && !selected.isEmpty()) {
-				String text = selected
-						.stream()
-						.map(LogLine::content)
-						.collect(Collectors.joining(System.lineSeparator()));
-				copyToClipboard(text);
-			}
-		});
+		copyItem.setOnAction(_ -> copySelectedLines(listView));
 		contextMenu.getItems().add(copyItem);
 
 		listView.setContextMenu(contextMenu);
@@ -673,14 +684,7 @@ public class MainController {
 		listView.setOnKeyPressed(e -> {
 			if (!e.isShortcutDown() || e.getCode() != KeyCode.C)
 				return;
-			List<LogLine> selected = listView.getSelectionModel().getSelectedItems();
-			if (selected != null && !selected.isEmpty()) {
-				String text = selected
-						.stream()
-						.map(LogLine::content)
-						.collect(Collectors.joining(System.lineSeparator()));
-				copyToClipboard(text);
-			}
+			copySelectedLines(listView);
 			e.consume();
 		});
 	}
@@ -826,6 +830,7 @@ public class MainController {
 				&& state.countedRules.equals(currentRules) && state.countedGeneration == snapshot.generation();
 		int startLine = incremental ? Math.max(0, state.lastCountedLine - 1) : 0;
 		int[] counts = incremental ? state.countsBeforeLastLine.clone() : new int[currentRules.size()];
+		highlightsPane.getChildren().setAll(new Label("Counting highlights..."));
 		highlightCounterThread = new Thread(() -> {
 			int[] beforeLast = counts.clone();
 			try {
@@ -843,6 +848,21 @@ public class MainController {
 				}
 			} catch (IOException e) {
 				logger.debug("Could not count highlights in {}", state.file, e);
+				Thread worker = Thread.currentThread();
+				Platform.runLater(() -> {
+					if (highlightCounterThread != worker || state.closed || getActiveTabState() != state
+							|| !highlightRules.equals(currentRules)
+							|| state.logItems.snapshot().generation() != snapshot.generation())
+						return;
+					highlightCounterThread = null;
+					state.highlightCounts = null;
+					state.countsBeforeLastLine = null;
+					state.lastCountedLine = 0;
+					Label error = new Label("Highlight counts unavailable: " + e.getMessage());
+					error.setTooltip(new Tooltip(error.getText()));
+					updateHighlightsUI(currentRules, null);
+					highlightsPane.getChildren().add(error);
+				});
 				return;
 			}
 			int[] baseline = beforeLast;
@@ -871,7 +891,7 @@ public class MainController {
 		highlightsPane.getChildren().clear();
 		for (int i = 0; i < currentRules.size(); i++) {
 			HighlightRule rule = currentRules.get(i);
-			int count = counts[i];
+			String count = counts == null ? "unavailable" : Integer.toString(counts[i]);
 
 			HBox highlightTag = new HBox(5);
 			highlightTag.setAlignment(Pos.CENTER_LEFT);
@@ -996,11 +1016,12 @@ public class MainController {
 				Platform.runLater(() -> {
 					if (!isCurrentOccurrenceSearch(state, occurrenceTab, worker))
 						return;
-					ruleTabMap.remove(rule);
-					if (ruleTabMap.isEmpty())
-						openOccurrenceTabs.remove(state);
-					occurrencesTabPane.getTabs().remove(occurrenceTab);
-					DialogUtil.showError("Error searching for occurrences: " + e.getMessage());
+					occurrenceTab.getProperties().remove("searchThread");
+					occurrenceTab.setText("Search failed: " + rule.getPattern());
+					header.setText("Search incomplete; no results published. " + e.getMessage());
+					header.setWrapText(true);
+					header.setTooltip(new Tooltip(header.getText()));
+					layout.getChildren().remove(progressBar);
 				});
 				return;
 			}
@@ -1207,10 +1228,19 @@ public class MainController {
 	}
 
 	private boolean handleEmptyItem(ListCell<LogLine> listCell, LogLine item, boolean empty) {
-		if (!empty && item != null)
-			return false;
-
 		listCell.setText(null);
+		listCell.setTooltip(null);
+		if (!empty && item != null) {
+			if (item.isReadError()) {
+				listCell.setGraphic(null);
+				listCell.setText("Line " + item.lineNumber() + " unavailable: " + item.errorMessage());
+				listCell.setTooltip(new Tooltip(listCell.getText()));
+				listCell.setStyle("-fx-text-fill: firebrick; -fx-font-family: 'monospace';");
+				return true;
+			}
+			return false;
+		}
+
 		listCell.setGraphic(null);
 		listCell.setStyle("");
 		return true;

@@ -70,6 +70,33 @@ rewrites preserving all of these can evade detection. Initial indexing still run
 a file, occurrence results are held in memory, and expensive regular expressions can remain
 costly on very long lines.
 
+#### Oversized-line safety (B01)
+
+File-backed reads support at most **1 MiB (1,048,576 bytes) per UTF-8 encoded line**, including
+any CR/LF terminators. Batch payloads are also capped at 1 MiB. Snapshot offsets are checked
+before allocating the payload or decoding text; the encoded limit also bounds a decoded line
+to at most 1,048,576 UTF-16 code units. Content is never silently shortened.
+
+An unsupported line appears as an explicit unavailable row, separate from log text and excluded
+from highlighting. Copying a selection containing an unavailable row fails without replacing
+the clipboard. Highlight counts become unavailable, and occurrence searches report an incomplete
+search without publishing partial results. Split oversized records upstream to read/search/copy
+them; ordinary rows before and after an oversized line remain individually readable.
+
+This is an allocation-safety limit, not a global memory budget: the offset index, decoded cache,
+multiple tabs, concurrent scans, and occurrence results still have the limitations described above.
+
+Allocation-safety evidence: on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35, with `-Xmx32m`
+(33,554,432-byte max heap), a sparse 128 MiB newline-free file (zero allocated filesystem blocks)
+indexed successfully both before and after B01. Reading it previously raised `OutOfMemoryError`;
+now it raises `OversizedLineException` before allocating its payload. This demonstrates rejection,
+not a throughput improvement or a bound on total application heap. Reproduce after `mvn test` with:
+
+```bash
+java -Xmx32m -cp target/classes:target/test-classes \
+  ch.eitchnet.luminelog.model.LogFileModelHeapProbe target/storage-guard-probe.log IO_EXCEPTION
+```
+
 ### Building a package
 
 ```bash

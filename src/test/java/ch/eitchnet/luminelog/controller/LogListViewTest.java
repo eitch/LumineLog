@@ -289,11 +289,125 @@ class LogListViewTest {
 		awaitCount(pane, 0);
 	}
 
+	@Test
+	void errorRowsAreDistinctAndCannotBeCopiedAsText() throws Exception {
+		LogLine error = LogLine.readError(2, "Line exceeds read limit");
+		assertEquals("first" + System.lineSeparator() + "last", MainController.selectedText(
+				java.util.List.of(new LogLine(1, "first"), new LogLine(3, "last"))));
+		assertThrows(IllegalStateException.class, () -> MainController.selectedText(
+				java.util.List.of(new LogLine(1, "first"), error, new LogLine(3, "last"))));
+		fx(() -> {
+			try {
+				MainController controller = new MainController();
+				ListCell<LogLine> cell = new ListCell<>();
+				var handle = MainController.class.getDeclaredMethod("handleEmptyItem", ListCell.class,
+						LogLine.class, boolean.class);
+				handle.setAccessible(true);
+				assertEquals(true, handle.invoke(controller, cell, error, false));
+				assertTrue(cell.getText().contains("Line 2 unavailable"));
+				assertNull(cell.getGraphic());
+				assertNotNull(cell.getTooltip());
+				assertEquals(false, handle.invoke(controller, cell, new LogLine(3, "real text"), false));
+				assertNull(cell.getText());
+				assertNull(cell.getTooltip());
+				assertEquals(true, handle.invoke(controller, cell, null, true));
+				assertEquals("", cell.getStyle());
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+	}
+
+	@Test
+	void oversizedLineMakesCountsUnavailableAndSearchIncomplete() throws Exception {
+		Path file = tempDir.resolve("oversized-scan.log");
+		Files.writeString(file, "ERROR");
+		LogFileModel model = new LogFileModel(file);
+		MainController[] controller = new MainController[1];
+		VirtualLogList[] items = new VirtualLogList[1];
+		Object[] state = new Object[1];
+		FlowPane pane = new FlowPane();
+		TabPane occurrences = new TabPane();
+		HighlightRule rule = new HighlightRule("ERROR", "#ff8080", false);
+		fx(() -> {
+			try {
+				controller[0] = new MainController();
+				items[0] = new VirtualLogList(model);
+				view = new LogListView();
+				view.setItems(items[0]);
+				Class<?> stateType = Class.forName(MainController.class.getName() + "$TabState");
+				var constructor = stateType.getDeclaredConstructors()[0];
+				constructor.setAccessible(true);
+				state[0] = constructor.newInstance(file.toFile(), "Default", model, items[0], view);
+				Tab tab = new Tab();
+				tab.setUserData(state[0]);
+				setField(controller[0], "tabPane", new TabPane(tab));
+				setField(controller[0], "occurrencesTabPane", occurrences);
+				setField(controller[0], "highlightsPane", pane);
+				var rules = MainController.class.getDeclaredField("highlightRules");
+				rules.setAccessible(true);
+				@SuppressWarnings("unchecked")
+				java.util.List<HighlightRule> values = (java.util.List<HighlightRule>) rules.get(controller[0]);
+				values.add(rule);
+				count(controller[0]);
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+		awaitCount(pane, 1);
+		Files.writeString(file, "ERROR\n");
+		try (java.io.RandomAccessFile output = new java.io.RandomAccessFile(file.toFile(), "rw")) {
+			output.setLength(2 * 1024 * 1024);
+		}
+		model.updateIndex();
+		Thread[] workers = new Thread[2];
+		fx(() -> {
+			try {
+				items[0].publish(model.snapshot());
+				setField(controller[0], "lastUpdateHighlightsBar", 0L);
+				count(controller[0]);
+				var counter = MainController.class.getDeclaredField("highlightCounterThread");
+				counter.setAccessible(true);
+				workers[0] = (Thread) counter.get(controller[0]);
+				var search = MainController.class.getDeclaredMethod("showOccurrences", HighlightRule.class);
+				search.setAccessible(true);
+				search.invoke(controller[0], rule);
+				workers[1] = (Thread) occurrences.getTabs().getFirst().getProperties().get("searchThread");
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+		for (Thread worker : workers) {
+			assertNotNull(worker);
+			worker.join(10000);
+			assertFalse(worker.isAlive());
+		}
+		fx(() -> {
+			assertEquals("ERROR (unavailable)",
+					((Label) ((HBox) pane.getChildren().getFirst()).getChildren().getFirst()).getText());
+			assertTrue(((Label) pane.getChildren().getLast()).getText().startsWith("Highlight counts unavailable:"));
+			try {
+				var counts = state[0].getClass().getDeclaredField("highlightCounts");
+				counts.setAccessible(true);
+				assertNull(counts.get(state[0]));
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+			assertEquals(1, occurrences.getTabs().size());
+			Tab tab = occurrences.getTabs().getFirst();
+			assertTrue(tab.getText().startsWith("Search failed:"));
+			var layout = (javafx.scene.layout.VBox) tab.getContent();
+			assertEquals(1, layout.getChildren().size());
+			assertTrue(((Label) layout.getChildren().getFirst()).getText().startsWith("Search incomplete;"));
+		});
+	}
+
 	private void awaitCount(FlowPane pane, int expected) throws Exception {
 		for (int attempt = 0; attempt < 30; attempt++) {
 			boolean[] found = new boolean[1];
 			fx(() -> found[0] = !pane.getChildren().isEmpty()
-					&& ((Label) ((HBox) pane.getChildren().getFirst()).getChildren().getFirst()).getText()
+					&& pane.getChildren().getFirst() instanceof HBox tag
+					&& ((Label) tag.getChildren().getFirst()).getText()
 					.equals("ERROR (" + expected + ")"));
 			if (found[0])
 				return;
