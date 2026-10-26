@@ -52,6 +52,24 @@ mvn clean install
 mvn javafx:run
 ```
 
+### Log view behavior and testing
+
+The log view retains JavaFX `ListView` virtualization. Background indexing publishes versioned,
+immutable index snapshots; pending updates are coalesced before they reach the JavaFX thread.
+Following is remembered per file tab. Scrolling upward, navigating backward, or dragging a
+selection pauses it; scrolling to the bottom, pressing End, or enabling Follow Tail resumes it.
+Drag selection supports edge autoscrolling, and rows stay single-line at the selected font size.
+
+Run regression tests with `mvn test`. JavaFX interaction tests need a graphical display; on
+headless Linux, use `xvfb-run -a mvn test` with Xvfb installed.
+
+Index snapshots preserve offsets and read boundaries, not historical file contents. If a file
+is replaced or overwritten before a pending read, that read may fail and the next update reloads
+the view. Change detection uses file identity, timestamps, size, and a bounded tail sample;
+rewrites preserving all of these can evade detection. Initial indexing still runs while opening
+a file, occurrence results are held in memory, and expensive regular expressions can remain
+costly on very long lines.
+
 ### Building a package
 
 ```bash
