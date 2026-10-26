@@ -247,7 +247,7 @@ public class LogFileModel {
 					throw new IOException("Invalid snapshot boundaries for " + filePath);
 				decoded.add(sanitizeLine(new String(bytes, (int) start, (int) (end - start), StandardCharsets.UTF_8)));
 			}
-			return new Batch(bytes, startLine, endLine, startOffset, totalBytesToRead, decoded);
+			return new Batch(bytes, startLine, endLine, startOffset, totalBytesToRead, decoded, true);
 		}
 	}
 
@@ -261,12 +261,13 @@ public class LogFileModel {
 
 		public Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead) {
 			this(bytes, startLine, endLine, startOffset, totalBytesToRead,
-					decodeLines(bytes, (long) endLine - startLine, totalBytesToRead));
+					decodeLines(bytes, (long) endLine - startLine, totalBytesToRead), false);
 		}
 
 		private Batch(byte[] bytes, int startLine, int endLine, long startOffset, long totalBytesToRead,
-				List<String> lines) {
-			this.bytes = bytes.clone();
+				List<String> lines, boolean takeOwnership) {
+			// Only the snapshot reader may transfer its freshly allocated, unexposed payload.
+			this.bytes = takeOwnership ? bytes : bytes.clone();
 			this.startLine = startLine;
 			this.endLine = endLine;
 			this.startOffset = startOffset;

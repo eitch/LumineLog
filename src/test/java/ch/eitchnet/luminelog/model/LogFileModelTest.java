@@ -31,9 +31,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -183,6 +185,30 @@ public class LogFileModelTest {
 		byte[] boundary = new byte[LogFileModel.MAX_BATCH_BYTES];
 		assertEquals(LogFileModel.MAX_DECODED_LINE_CHARS,
 				new LogFileModel.Batch(boundary, 0, 1, 0, boundary.length).getLines().getFirst().length());
+	}
+
+	@Test
+	public void testFileBackedBatchRetainsImmutableBytesAndLines() throws IOException {
+		Path logFile = tempDir.resolve("owned-batch.log");
+		String content = "héllo\r\n😀\n";
+		byte[] expected = content.getBytes(StandardCharsets.UTF_8);
+		Files.write(logFile, expected);
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Batch batch = model.snapshot().readBatch(0);
+		byte[] exposed = batch.bytes();
+		java.util.Arrays.fill(exposed, (byte) 0);
+		assertArrayEquals(expected, batch.bytes());
+		assertNotSame(batch.bytes(), batch.bytes());
+		assertEquals(List.of("héllo", "😀", ""), batch.getLines());
+		assertThrows(UnsupportedOperationException.class, () -> batch.getLines().set(0, "changed"));
+		assertEquals(0, batch.startLine());
+		assertEquals(3, batch.endLine());
+		assertEquals(0, batch.startOffset());
+		assertEquals(expected.length, batch.totalBytesToRead());
+		Files.writeString(logFile, "replacement");
+		model.updateIndex();
+		assertArrayEquals(expected, batch.bytes());
+		assertEquals(List.of("héllo", "😀", ""), batch.getLines(model));
 	}
 
 	@Test

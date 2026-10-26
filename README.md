@@ -97,6 +97,26 @@ java -Xmx32m -cp target/classes:target/test-classes \
   ch.eitchnet.luminelog.model.LogFileModelHeapProbe target/storage-guard-probe.log IO_EXCEPTION
 ```
 
+#### Internal batch ownership (B02)
+
+File-backed batches take ownership of their freshly allocated payload instead of cloning it.
+Public `Batch` inputs and `bytes()` output remain defensively copied, decoded lines remain
+immutable, and snapshot validation is unchanged.
+
+Allocation evidence: on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35, using the command below
+(128 MiB heap settings, Serial GC, escape analysis disabled), 100 repeated reads after 100 warmup
+reads of one 1 MiB ASCII line allocated **315,487,200 bytes before** and **210,628,000 bytes after**
+B02 on the reading thread. The reduction is **1,048,592 bytes per read**: one payload array plus
+its header/alignment on this JVM. These counters include decoding and validation allocations;
+they do not measure throughput, retained heap, or a global memory bound. The probe uses an
+automatically deleted fixture under `target`, does not call `bytes()`, and requires a JDK with
+thread allocation counters. Reproduce after `mvn test` with:
+
+```bash
+java -Xms128m -Xmx128m -XX:+UseSerialGC -XX:-DoEscapeAnalysis -cp target/classes \
+  src/test/probes/BatchAllocationProbe.java
+```
+
 ### Building a package
 
 ```bash
