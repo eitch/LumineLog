@@ -18,6 +18,7 @@ package ch.eitchnet.luminelog.controller;
 
 import ch.eitchnet.luminelog.LumineLogApplication;
 import ch.eitchnet.luminelog.model.*;
+import ch.eitchnet.luminelog.service.FileOpenService;
 import ch.eitchnet.luminelog.service.ScanService;
 import ch.eitchnet.luminelog.service.LineLoadingService;
 import ch.eitchnet.luminelog.util.DialogUtil;
@@ -67,6 +68,7 @@ public class MainController {
 
 	private final ConfigService configService = new ConfigService();
 	private final ScanService scanService;
+	private final FileOpenService fileOpenService;
 	private final LineLoadingService lineLoadingService = new LineLoadingService(Platform::runLater);
 	private final Object highlightCountKey = new Object();
 	private boolean disposed;
@@ -76,7 +78,12 @@ public class MainController {
 	}
 
 	MainController(ScanService scanService) {
+		this(scanService, new FileOpenService(Platform::runLater));
+	}
+
+	MainController(ScanService scanService, FileOpenService fileOpenService) {
 		this.scanService = scanService;
+		this.fileOpenService = fileOpenService;
 	}
 
 	@FXML
@@ -127,6 +134,8 @@ public class MainController {
 		List<HighlightRule> countedRules = List.of();
 		long countedGeneration = -1;
 		int[] countsBeforeLastLine;
+		ScanService.Job<LogFileModel> openJob;
+		String openStatus = "Opening file...";
 
 		TabState(File file, String highlightGroup, LogFileModel logModel, VirtualLogList logItems,
 				LogListView logListView) {
@@ -139,8 +148,13 @@ public class MainController {
 
 		void stopTailing() {
 			closed = true;
+			if (openJob != null) {
+				openJob.cancel();
+				openJob = null;
+			}
 			pendingUpdate.set(null);
-			logItems.close();
+			if (logItems != null)
+				logItems.close();
 			logListView.dispose();
 			if (tailTimer != null) {
 				tailTimer.cancel();
@@ -227,7 +241,8 @@ public class MainController {
 			} finally {
 				updatingTailCheckBox = false;
 			}
-			state.logListView.requestTail();
+			if (state.logModel != null)
+				state.logListView.requestTail();
 			updateFooterStatus(state);
 
 			if (state.highlightGroup != null && !state.highlightGroup.equals(this.currentGroup)) {
@@ -598,6 +613,8 @@ public class MainController {
 	}
 
 	private void openFile(File file, String highlightGroup) {
+		if (disposed)
+			return;
 		addToHistory(file);
 		for (Tab existingTab : tabPane.getTabs()) {
 			TabState state = (TabState) existingTab.getUserData();
@@ -607,53 +624,92 @@ public class MainController {
 			}
 		}
 
-		try {
-			LogFileModel logModel = new LogFileModel(file.toPath());
-			VirtualLogList logItems = new VirtualLogList(logModel, lineLoadingService);
-			LogListView logListView = createLogListView();
-			logListView.setItems(logItems);
-
-			Tab tab = new Tab();
-			Label tabLabel = new Label(file.getName());
-			Button closeBtn = new Button("×");
-			closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
-			TabState state = new TabState(file, highlightGroup, logModel, logItems, logListView);
-			logListView.followingProperty().addListener((_, _, following) -> {
-				if (getActiveTabState() == state) {
-					updatingTailCheckBox = true;
-					try {
-						tailCheckBox.setSelected(following);
-					} finally {
-						updatingTailCheckBox = false;
-					}
+		LogListView logListView = createLogListView();
+		Tab tab = new Tab();
+		Label tabLabel = new Label(file.getName());
+		Button closeBtn = new Button("×");
+		closeBtn.setStyle("-fx-background-color: transparent; -fx-padding: 0 0 0 5; -fx-cursor: hand;");
+		TabState state = new TabState(file, highlightGroup, null, null, logListView);
+		logListView.followingProperty().addListener((_, _, following) -> {
+			if (getActiveTabState() == state) {
+				updatingTailCheckBox = true;
+				try {
+					tailCheckBox.setSelected(following);
+				} finally {
+					updatingTailCheckBox = false;
 				}
-			});
-			closeBtn.setOnAction(_ -> closeTab(tab, false));
-			HBox graphic = new HBox(tabLabel, closeBtn);
-			graphic.setAlignment(Pos.CENTER);
-			tab.setGraphic(graphic);
-			tab.setClosable(false);
-			tab.setContent(logListView);
+			}
+		});
+		closeBtn.setOnAction(_ -> closeTab(tab, false));
+		HBox graphic = new HBox(tabLabel, closeBtn);
+		graphic.setAlignment(Pos.CENTER);
+		tab.setGraphic(graphic);
+		tab.setClosable(false);
+		graphic.setOnMouseReleased(event -> {
+			if (event.getButton() == MouseButton.MIDDLE)
+				closeTab(tab, true);
+		});
+		tab.setUserData(state);
+		tab.setOnClosed(_ -> state.stopTailing());
+		tab.setContent(new VBox(new Label(state.openStatus)));
+		tabPane.getTabs().add(tab);
+		tabPane.getSelectionModel().select(tab);
+		beginFileOpen(tab, state);
+	}
 
-			graphic.setOnMouseReleased(event -> {
-				if (event.getButton() == MouseButton.MIDDLE)
-					closeTab(tab, true);
-			});
-			tab.setUserData(state);
-			tab.setOnClosed(_ -> {
-				logger.info("Closing tab for file {}", file.getAbsolutePath());
-				state.stopTailing();
-			});
-
-			tabPane.getTabs().add(tab);
-			tabPane.getSelectionModel().select(tab);
-
-			updateHighlightsBar();
-			logListView.requestTail();
-			startTailing(state);
-		} catch (IOException e) {
-			DialogUtil.showError("Could not open file: " + e.getMessage());
-		}
+	private void beginFileOpen(Tab tab, TabState state) {
+		if (disposed || state.closed || !tabPane.getTabs().contains(tab))
+			return;
+		Label message = new Label("Opening file...");
+		message.setWrapText(true);
+		ProgressIndicator progress = new ProgressIndicator();
+		Button action = new Button("Cancel opening");
+		action.setOnAction(_ -> fileOpenService.cancel(state));
+		VBox panel = new VBox(10, message, progress, action);
+		panel.setPadding(new Insets(16));
+		tab.setContent(panel);
+		state.openStatus = message.getText();
+		if (getActiveTabState() == state)
+			updateFooterStatus(state);
+		state.openJob = fileOpenService.open(state, state.file.toPath(), (job, event) -> {
+			if (disposed || state.closed || !tabPane.getTabs().contains(tab) || !job.isCurrent())
+				return;
+			switch (event.state()) {
+			case QUEUED -> message.setText("Opening queued...");
+			case RUNNING -> message.setText("Indexing file...");
+			case SUCCEEDED -> {
+				state.openJob = null;
+				state.logModel = event.result();
+				state.logItems = new VirtualLogList(state.logModel, lineLoadingService);
+				state.logListView.setItems(state.logItems);
+				tab.setContent(state.logListView);
+				if (getActiveTabState() == state) {
+					updateFooterStatus(state);
+					updateHighlightsBar();
+				}
+				state.logListView.requestTail();
+				startTailing(state);
+				return;
+			}
+			case CANCELLED, FAILED, REJECTED -> {
+				state.openJob = null;
+				String detail = switch (event.state()) {
+				case CANCELLED -> "Opening cancelled.";
+				case REJECTED -> "Opening queue is full. Retry when another file finishes opening.";
+				default -> "Could not open file: " + event.error().getMessage();
+				};
+				message.setText(detail);
+				panel.getChildren().remove(progress);
+				action.setText("Retry opening");
+				action.setOnAction(_ -> beginFileOpen(tab, state));
+				if (event.state() == ScanService.State.FAILED)
+					logger.warn("Could not open file {}", state.file, event.error());
+			}
+			}
+			state.openStatus = message.getText();
+			if (getActiveTabState() == state)
+				updateFooterStatus(state);
+		});
 	}
 
 	public static double toPrecision(double value, int decimals) {
@@ -1395,8 +1451,12 @@ public class MainController {
 	}
 
 	private void updateFooterStatus(TabState state) {
-		if (state == null || state.logModel == null) {
+		if (state == null) {
 			this.statusLabel.setText("No file opened");
+			return;
+		}
+		if (state.logModel == null) {
+			this.statusLabel.setText("File: " + state.file.getAbsolutePath() + " | " + state.openStatus);
 			return;
 		}
 		long size = state.logItems.snapshot().fileSize();
@@ -1453,6 +1513,7 @@ public class MainController {
 				cancelOccurrenceSearch(tab);
 		}
 		openOccurrenceTabs.clear();
+		fileOpenService.close();
 		scanService.close();
 		lineLoadingService.close();
 	}

@@ -17,8 +17,10 @@
 package ch.eitchnet.luminelog.model;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -29,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 
 public class LogFileModel {
 
@@ -44,8 +47,12 @@ public class LogFileModel {
 	private final ByteBuffer indexSearchBuffer = ByteBuffer.allocateDirect(16384);
 
 	public LogFileModel(Path filePath) throws IOException {
+		this(filePath, () -> false);
+	}
+
+	public LogFileModel(Path filePath, BooleanSupplier cancelled) throws IOException {
 		this.filePath = filePath;
-		updateIndex();
+		updateIndex(cancelled);
 	}
 
 	private static Object identity(BasicFileAttributes attrs) {
@@ -77,6 +84,17 @@ public class LogFileModel {
 	}
 
 	public synchronized void updateIndex() throws IOException {
+		updateIndex(() -> false);
+	}
+
+	private void checkCancelled(BooleanSupplier cancelled) throws InterruptedIOException {
+		if (Thread.currentThread().isInterrupted() || cancelled.getAsBoolean())
+			throw new InterruptedIOException("Indexing cancelled for " + filePath);
+	}
+
+	public synchronized void updateIndex(BooleanSupplier cancelled) throws IOException {
+		Objects.requireNonNull(cancelled, "cancelled");
+		checkCancelled(cancelled);
 		BasicFileAttributes attrs = Files.readAttributes(filePath, BasicFileAttributes.class);
 		Object fileIdentity = identity(attrs);
 		long fileSize = attrs.size();
@@ -84,17 +102,23 @@ public class LogFileModel {
 				|| fileSize < current.fileSize
 				|| (fileSize == current.fileSize && !attrs.lastModifiedTime().equals(current.modified));
 		try (RandomAccessFile raf = new RandomAccessFile(this.filePath.toFile(), "r")) {
+			checkCancelled(cancelled);
 			if (!rebuild && fileSize > current.fileSize)
 				rebuild = !Arrays.equals(current.tail, readTail(raf, current.fileSize));
-			if (!rebuild && fileSize == current.fileSize)
+			if (!rebuild && fileSize == current.fileSize) {
+				current.validate(raf);
+				checkCancelled(cancelled);
 				return;
+			}
 
+			byte[] tail = readTail(raf, fileSize);
 			OffsetBuilder offsets = new OffsetBuilder(rebuild ? null : current.offsets);
 			if (rebuild)
 				offsets.add(0);
 			long currentPos = rebuild ? 0 : current.fileSize;
 			FileChannel channel = raf.getChannel();
 			while (currentPos < fileSize) {
+				checkCancelled(cancelled);
 				indexSearchBuffer.clear();
 				indexSearchBuffer.limit((int) Math.min(indexSearchBuffer.capacity(), fileSize - currentPos));
 				int read = channel.read(indexSearchBuffer, currentPos);
@@ -102,20 +126,28 @@ public class LogFileModel {
 					throw new IOException("File shortened while indexing " + filePath);
 				indexSearchBuffer.flip();
 				for (int i = 0; i < read; i++) {
+					if ((i & 1023) == 0)
+						checkCancelled(cancelled);
 					if (indexSearchBuffer.get(i) == '\n')
 						offsets.add(currentPos + i + 1);
 				}
 				currentPos += read;
 			}
-			byte[] tail = readTail(raf, fileSize);
-			BasicFileAttributes after = Files.readAttributes(filePath, BasicFileAttributes.class);
-			if (!Objects.equals(fileIdentity, identity(after)) || after.size() < fileSize
-					|| (after.size() == fileSize && !attrs.lastModifiedTime().equals(after.lastModifiedTime())))
-				throw new IOException("File changed while indexing " + filePath);
+			checkCancelled(cancelled);
 			long version = current == null ? 1 : current.version + 1;
 			long generation = current == null ? 1 : current.generation + (rebuild ? 1 : 0);
-			current = new Snapshot(filePath, offsets.build(), fileSize, attrs.lastModifiedTime(), fileIdentity,
+			Snapshot indexed = new Snapshot(filePath, offsets.build(), fileSize, attrs.lastModifiedTime(), fileIdentity,
 					version, generation, tail);
+			indexed.validate(raf);
+			try (RandomAccessFile latest = new RandomAccessFile(filePath.toFile(), "r")) {
+				indexed.validate(latest);
+			}
+			checkCancelled(cancelled);
+			current = indexed;
+		} catch (ClosedByInterruptException e) {
+			InterruptedIOException cancelledRead = new InterruptedIOException("Indexing cancelled for " + filePath);
+			cancelledRead.initCause(e);
+			throw cancelledRead;
 		}
 	}
 

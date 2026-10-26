@@ -20,6 +20,7 @@ import ch.eitchnet.luminelog.model.HighlightRule;
 import ch.eitchnet.luminelog.model.LogFileModel;
 import ch.eitchnet.luminelog.model.LogLine;
 import ch.eitchnet.luminelog.model.VirtualLogList;
+import ch.eitchnet.luminelog.service.FileOpenService;
 import ch.eitchnet.luminelog.service.ScanService;
 import ch.eitchnet.luminelog.service.LineLoadingService;
 import javafx.animation.PauseTransition;
@@ -702,6 +703,249 @@ class LogListViewTest {
 		var field = target.getClass().getDeclaredField(name);
 		field.setAccessible(true);
 		field.set(target, value);
+	}
+
+	@Test
+	void fileOpenPublishesLoadingTabBeforeAttachingModel() throws Exception {
+		Path file = tempDir.resolve("opening.log");
+		Files.writeString(file, "one\ntwo");
+		fx(() -> {
+			MainController controller = openingController();
+			invoke(controller, "openFile", new Class<?>[] { java.io.File.class, String.class }, file.toFile(), "Default");
+			TabPane tabs = (TabPane) field(controller, "tabPane");
+			assertEquals(1, tabs.getTabs().size());
+			Tab tab = tabs.getTabs().getFirst();
+			assertInstanceOf(javafx.scene.layout.VBox.class, tab.getContent(), "Opening must first publish a loading panel");
+			assertNull(field(tab.getUserData(), "logModel"));
+		});
+	}
+
+	private MainController openingController() {
+		return openingController(new FileOpenService(Platform::runLater));
+	}
+
+	private MainController openingController(FileOpenService opener) {
+		MainController controller = new MainController(new ScanService(Platform::runLater), opener);
+		controllers.add(controller);
+		try {
+			setField(field(controller, "configService"), "configPath", tempDir.resolve("config.json"));
+			setField(controller, "tabPane", new TabPane());
+			setField(controller, "occurrencesTabPane", new TabPane());
+			setField(controller, "highlightsPane", new FlowPane());
+			setField(controller, "fontSizeSpinner", new javafx.scene.control.Spinner<Integer>(8, 32, 12));
+			setField(controller, "historyMenu", new javafx.scene.control.Menu());
+			setField(controller, "statusLabel", new Label());
+			setField(controller, "tailCheckBox", new javafx.scene.control.CheckBox());
+			var groups = new javafx.scene.control.ComboBox<String>();
+			groups.getItems().add("Default");
+			setField(controller, "highlightGroupComboBox", groups);
+			setField(controller, "currentGroup", "Default");
+			TabPane tabs = (TabPane) field(controller, "tabPane");
+			tabs.getTabs().addListener((ListChangeListener<Tab>) change -> invoke(controller, "handleRemovedTabs",
+					new Class<?>[] { ListChangeListener.Change.class }, change));
+			tabs.getSelectionModel().selectedItemProperty().addListener((_, oldTab, newTab) -> invoke(controller,
+					"handleActiveTabChanged", new Class<?>[] { Tab.class, Tab.class }, oldTab, newTab));
+			return controller;
+		} catch (ReflectiveOperationException e) {
+			throw new AssertionError(e);
+		}
+	}
+
+	@Test
+	void fileOpenWaitsForOwnerDeliveryAndRetainsFollowSetting() throws Exception {
+		Path file = tempDir.resolve("delivered.log");
+		Files.writeString(file, "one\ntwo");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		FileOpenService opener = new FileOpenService(callbacks::add);
+		MainController[] controller = new MainController[1];
+		Tab[] tab = new Tab[1];
+		fx(() -> {
+			controller[0] = openingController(opener);
+			invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, file.toFile(), "Default");
+			TabPane tabs = (TabPane) field(controller[0], "tabPane");
+			tab[0] = tabs.getTabs().getFirst();
+			((LogListView) field(tab[0].getUserData(), "logListView")).followingProperty().set(false);
+			invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, file.toFile(), "Default");
+			assertEquals(1, tabs.getTabs().size(), "Duplicate loading opens select the existing tab");
+		});
+		// All three opening events are queued, not published, until we run their callbacks.
+		Runnable success = openingCompletion(callbacks);
+		fx(() -> {
+			assertNull(field(tab[0].getUserData(), "logModel"));
+			success.run();
+			LogListView list = assertInstanceOf(LogListView.class, tab[0].getContent());
+			assertFalse(list.followingProperty().get());
+			assertEquals(2, list.getItems().size());
+			assertNotNull(field(tab[0].getUserData(), "tailTimer"));
+			assertEquals(0, list.getSelectionModel().getSelectedIndices().size());
+		});
+	}
+
+	@Test
+	void cancelledOpenCannotAttachLateSuccessAndCanBeRetried() throws Exception {
+		Path file = tempDir.resolve("cancelled-open.log");
+		Files.writeString(file, "one");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		FileOpenService opener = new FileOpenService(callbacks::add);
+		MainController[] controller = new MainController[1];
+		Tab[] tab = new Tab[1];
+		fx(() -> {
+			controller[0] = openingController(opener);
+			invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, file.toFile(), "Default");
+			tab[0] = ((TabPane) field(controller[0], "tabPane")).getTabs().getFirst();
+		});
+		Runnable success = openingCompletion(callbacks);
+		fx(() -> {
+			openingAction(tab[0]).fire();
+			success.run();
+			assertNull(field(tab[0].getUserData(), "logModel"));
+		});
+		Runnable cancelled = callbacks.poll(10, TimeUnit.SECONDS);
+		assertNotNull(cancelled);
+		fx(() -> {
+			cancelled.run();
+			assertTrue(openingMessage(tab[0]).contains("cancelled"));
+			assertNull(field(tab[0].getUserData(), "tailTimer"));
+			assertEquals("Retry opening", openingAction(tab[0]).getText());
+			openingAction(tab[0]).fire();
+		});
+		Runnable retry = openingCompletion(callbacks);
+		fx(() -> {
+			retry.run();
+			assertInstanceOf(LogListView.class, tab[0].getContent());
+			assertEquals(1, ((TabPane) field(controller[0], "tabPane")).getTabs().size());
+		});
+	}
+
+	@Test
+	void closingOrDisposingLoadingTabSuppressesPendingAttachment() throws Exception {
+		for (boolean shutdown : new boolean[] { false, true }) {
+			Path file = tempDir.resolve("closed-open-" + shutdown + ".log");
+			Files.writeString(file, "one");
+			var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+			FileOpenService opener = new FileOpenService(callbacks::add);
+			MainController[] controller = new MainController[1];
+			Tab[] tab = new Tab[1];
+			fx(() -> {
+				controller[0] = openingController(opener);
+				invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, file.toFile(), "Default");
+				tab[0] = ((TabPane) field(controller[0], "tabPane")).getTabs().getFirst();
+			});
+			Runnable success = openingCompletion(callbacks);
+			fx(() -> {
+				if (shutdown)
+					controller[0].dispose();
+				else
+					invoke(controller[0], "closeTab", new Class<?>[] { Tab.class, boolean.class }, tab[0], true);
+				success.run();
+				drain(callbacks);
+				assertEquals(true, field(tab[0].getUserData(), "closed"));
+				assertNull(field(tab[0].getUserData(), "logModel"));
+				assertNull(field(tab[0].getUserData(), "logItems"));
+				assertNull(field(tab[0].getUserData(), "tailTimer"));
+			});
+		}
+	}
+
+	@Test
+	void failedOpenShowsInlineErrorAndRetryLoadsReplacement() throws Exception {
+		Path file = tempDir.resolve("missing-open.log");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		FileOpenService opener = new FileOpenService(callbacks::add);
+		MainController[] controller = new MainController[1];
+		Tab[] tab = new Tab[1];
+		fx(() -> {
+			controller[0] = openingController(opener);
+			invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, file.toFile(), "Default");
+			tab[0] = ((TabPane) field(controller[0], "tabPane")).getTabs().getFirst();
+		});
+		Runnable failure = openingCompletion(callbacks);
+		fx(() -> {
+			failure.run();
+			assertTrue(openingMessage(tab[0]).startsWith("Could not open file:"));
+			assertNull(field(tab[0].getUserData(), "logModel"));
+			assertNull(field(tab[0].getUserData(), "tailTimer"));
+		});
+		Files.writeString(file, "replacement");
+		fx(() -> openingAction(tab[0]).fire());
+		Runnable retry = openingCompletion(callbacks);
+		fx(() -> {
+			retry.run();
+			assertInstanceOf(LogListView.class, tab[0].getContent());
+		});
+	}
+
+	private static javafx.scene.control.Button openingAction(Tab tab) {
+		return (javafx.scene.control.Button) ((javafx.scene.layout.VBox) tab.getContent()).getChildren().getLast();
+	}
+
+	@Test
+	void queuedOpeningLeavesFxResponsiveAndOverloadIsVisible() throws Exception {
+		Path first = tempDir.resolve("queued-open.log");
+		Path second = tempDir.resolve("rejected-open.log");
+		Files.writeString(first, "one");
+		Files.writeString(second, "two");
+		var callbacks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+		FileOpenService opener = new FileOpenService(1, 1, callbacks::add);
+		ScanService workers = (ScanService) field(opener, "service");
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		workers.submit(new Object(), _ -> {
+			entered.countDown();
+			assertTrue(release.await(10, TimeUnit.SECONDS));
+			return null;
+		}, (_, _) -> { });
+		assertTrue(entered.await(10, TimeUnit.SECONDS));
+		MainController[] controller = new MainController[1];
+		try {
+			fx(() -> {
+				controller[0] = openingController(opener);
+				invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, first.toFile(), "Default");
+				invoke(controller[0], "openFile", new Class<?>[] { java.io.File.class, String.class }, second.toFile(), "Default");
+				drain(callbacks);
+				TabPane tabs = (TabPane) field(controller[0], "tabPane");
+				assertTrue(openingMessage(tabs.getTabs().getFirst()).contains("queued"));
+				assertTrue(openingMessage(tabs.getTabs().getLast()).contains("queue is full"));
+				assertEquals("Retry opening", openingAction(tabs.getTabs().getLast()).getText());
+				assertEquals(1, opener.queuedJobs());
+			});
+			pulses(); // An FX animation completes while the only opening worker is still blocked.
+			fx(() -> {
+				assertEquals(1, opener.activeJobs());
+				TabPane tabs = (TabPane) field(controller[0], "tabPane");
+				invoke(controller[0], "closeTab", new Class<?>[] { Tab.class, boolean.class }, tabs.getTabs().getFirst(), true);
+				assertEquals(0, opener.queuedJobs(), "Closing removes queued indexing work immediately");
+			});
+		} finally {
+			release.countDown();
+			opener.close();
+		}
+	}
+
+	private static String openingMessage(Tab tab) {
+		return ((Label) ((javafx.scene.layout.VBox) tab.getContent()).getChildren().getFirst()).getText();
+	}
+
+	private static Runnable openingCompletion(java.util.concurrent.BlockingQueue<Runnable> callbacks) throws Exception {
+		// ScanService guarantees ordered QUEUED, RUNNING, terminal events for a non-cancelled open.
+		for (int event = 0; event < 2; event++) {
+			Runnable callback = callbacks.poll(10, TimeUnit.SECONDS);
+			assertNotNull(callback);
+			fx(callback);
+		}
+		Runnable terminal = callbacks.poll(10, TimeUnit.SECONDS);
+		assertNotNull(terminal);
+		return terminal;
+	}
+
+	private static Object field(Object target, String name) {
+		try {
+			var field = target.getClass().getDeclaredField(name);
+			field.setAccessible(true);
+			return field.get(target);
+		} catch (ReflectiveOperationException e) {
+			throw new AssertionError(e);
+		}
 	}
 
 	private ListCell<?> cell(int index) {

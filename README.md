@@ -66,8 +66,8 @@ headless Linux, use `xvfb-run -a mvn test` with Xvfb installed.
 Index snapshots preserve offsets and read boundaries, not historical file contents. If a file
 is replaced or overwritten before a pending read, that read may fail and the next update reloads
 the view. Change detection uses file identity, timestamps, size, and a bounded tail sample;
-rewrites preserving all of these can evade detection. Initial indexing still runs while opening
-a file, occurrence results are held in memory, and expensive regular expressions can remain
+rewrites preserving all of these can evade detection. Initial indexing runs on bounded background
+workers while the tab shows its opening state. Occurrence results are held in memory, and expensive regular expressions can remain
 costly on very long lines.
 
 #### Oversized-line safety (B01)
@@ -223,7 +223,7 @@ The 8 MiB accounted-data cache budget remains **per list**, not a global heap bo
 temporarily coexist with each tab's cache; the service-wide admission bound also covers completed
 payloads awaiting publication. Each admitted batch is limited to 1 MiB encoded bytes plus decoded
 strings and object overhead; decode temporaries, indexes, selected/rendered rows, scans, and occurrence
-results remain outside cache accounting. Initial indexing still runs during opening until B06.
+results remain outside cache accounting. Initial indexing has a separate worker pool (B06).
 
 JFR counter evidence on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35, `-Xms128m -Xmx128m`
 (134,217,728-byte maximum heap): one tab visited 20 batch starts in a 5,120,000-byte ASCII fixture
@@ -237,6 +237,42 @@ The probe cleans up its fixture/recordings under `target`. Reproduce after `mvn 
 mvn -q dependency:build-classpath -Dmdep.outputFile=target/line-read-probe-classpath.txt
 java -Xms128m -Xmx128m \
   -cp "target/classes:$(<target/line-read-probe-classpath.txt)" src/test/probes/AsyncLineReadProbe.java
+```
+
+#### Asynchronous file opening (B06)
+
+Opening a file immediately creates a tab with queued/indexing progress and **Cancel opening**.
+`FileOpenService` constructs and initially indexes the model on a separate bounded pool: by default
+**2 workers and 8 queued jobs**, independent of scans and visible-line loading. A full queue produces
+an inline error, never caller-thread indexing. Cancelled, failed, or rejected tabs offer **Retry opening**;
+closing a loading tab removes its queued work or cancels its active job. Shutdown cancels all opening
+work without waiting on the FX thread. Late callbacks cannot attach content to closed or disposed tabs.
+Following and highlight-group choices remain per tab during opening; counts, searches, and tail polling
+start only after the ready model is attached on the FX thread.
+
+Indexing checks cancellation between reads, every 1,024 scanned bytes, and before publishing its index.
+Cancellation throws a controlled `InterruptedIOException` and never publishes partial offsets.
+This is cooperative cancellation, **not a timeout for a blocked OS/filesystem read**. Identity, size,
+timestamp, and bounded-tail validation reject detected truncation/replacement/rewrite races during
+indexing with a visible error; retry opens the current file. Appends beyond the captured boundary can
+be handled by normal tailing after attachment. Snapshot and metadata-preserving-rewrite limitations
+above still apply. Offset-index memory still grows with line count; background opening does not impose
+a global heap budget. Configuration/history disk operations remain synchronous until B14.
+
+JFR counter evidence on Linux 7.2.11 amd64, btrfs, Azul OpenJDK 27+35, `-Xms128m -Xmx128m`
+(134,217,728-byte maximum heap): one initial open of a sparse 67,108,864-byte newline-free fixture
+(one indexed row, no content decoding). Reproducing the former calling-thread construction policy
+with the current model produced **4,099 calling-thread file reads**. B06 produced **zero calling-thread
+reads** and **4,099 worker reads**. `jdk.FileRead` used a zero threshold. This measures placement of
+indexing reads, not UI latency, exact heap use, or improved disk throughput; the caller in the probe
+stands in for the FX thread. JavaFX regression tests separately verify a responsive animation while
+opening work is blocked, plus cancellation, overload, retry, follow preservation, and late-result guards.
+The probe cleans up its fixture/recordings under `target`. Reproduce after `mvn test`:
+
+```bash
+mvn -q dependency:build-classpath -Dmdep.outputFile=target/file-open-probe-classpath.txt
+java -Xms128m -Xmx128m \
+  -cp "target/classes:$(<target/file-open-probe-classpath.txt)" src/test/probes/AsyncFileOpenProbe.java
 ```
 
 ### Building a package

@@ -22,7 +22,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.FileTime;
@@ -30,6 +32,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -45,6 +49,140 @@ public class LogFileModelTest {
 	private static final Logger log = LoggerFactory.getLogger(LogFileModelTest.class);
 	@TempDir
 	Path tempDir;
+
+	@Test
+	public void testInterruptedInitialIndexAndUnchangedUpdateAreCancelled() throws IOException {
+		Path logFile = Files.writeString(tempDir.resolve("interrupted.log"), "");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		Thread.currentThread().interrupt();
+		try {
+			assertThrows(InterruptedIOException.class, () -> new LogFileModel(logFile));
+			assertThrows(InterruptedIOException.class, model::updateIndex);
+			assertTrue(Thread.currentThread().isInterrupted());
+			assertSame(before, model.snapshot());
+		} finally {
+			Thread.interrupted();
+		}
+	}
+
+	@Test
+	public void testPredicateCancelsInsideDenseAndUnterminatedChunks() throws IOException {
+		for (String content : List.of("\n".repeat(16384), "x".repeat(16384))) {
+			Path logFile = Files.writeString(tempDir.resolve("cancel-chunk.log"), content);
+			AtomicInteger checks = new AtomicInteger();
+			assertThrows(InterruptedIOException.class,
+					() -> new LogFileModel(logFile, () -> checks.incrementAndGet() == 8));
+			assertEquals(8, checks.get(), "Must check repeatedly within the first 16 KiB chunk");
+		}
+	}
+
+	@Test
+	public void testThreadInterruptionDuringDenseIndexingIsPreserved() throws IOException {
+		Path logFile = Files.writeString(tempDir.resolve("interrupt-dense.log"), "\n".repeat(16384));
+		AtomicInteger checks = new AtomicInteger();
+		try {
+			assertThrows(InterruptedIOException.class, () -> new LogFileModel(logFile, () -> {
+				if (checks.incrementAndGet() == 8)
+					Thread.currentThread().interrupt();
+				return false;
+			}));
+			assertEquals(8, checks.get());
+			assertTrue(Thread.currentThread().isInterrupted());
+		} finally {
+			Thread.interrupted();
+		}
+	}
+
+	@Test
+	public void testCancelledAppendAndRebuildKeepPublishedSnapshot() throws IOException {
+		Path logFile = Files.writeString(tempDir.resolve("cancel-update.log"), "original\n");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		Files.writeString(logFile, "\n".repeat(32768), StandardOpenOption.APPEND);
+		AtomicInteger checks = new AtomicInteger();
+		assertThrows(InterruptedIOException.class,
+				() -> model.updateIndex(() -> checks.incrementAndGet() == 5));
+		assertSame(before, model.snapshot());
+		assertEquals(2, before.lineCount());
+		assertEquals("original", before.readBatch(0).getLines().getFirst());
+		model.updateIndex();
+		assertEquals(32770, model.getLineCount());
+		LogFileModel.Snapshot appended = model.snapshot();
+		Files.writeString(logFile, "replacement\n");
+		checks.set(0);
+		assertThrows(InterruptedIOException.class,
+				() -> model.updateIndex(() -> checks.incrementAndGet() == 4));
+		assertSame(appended, model.snapshot());
+		model.updateIndex();
+		assertEquals(List.of("replacement", ""), model.readBatch(0).getLines());
+	}
+
+	@Test
+	public void testCancellationImmediatelyBeforePublicationKeepsSnapshot() throws IOException {
+		Path logFile = Files.writeString(tempDir.resolve("cancel-publish.log"), "before\n");
+		LogFileModel model = new LogFileModel(logFile);
+		LogFileModel.Snapshot before = model.snapshot();
+		Files.writeString(logFile, "after\n", StandardOpenOption.APPEND);
+		AtomicInteger checks = new AtomicInteger();
+		assertThrows(InterruptedIOException.class,
+				() -> model.updateIndex(() -> checks.incrementAndGet() == 6));
+		assertSame(before, model.snapshot());
+		model.updateIndex();
+		assertEquals(List.of("before", "after", ""), model.readBatch(0).getLines());
+	}
+
+	@Test
+	public void testRotationDuringInitialAndUpdateIndexFailsWithoutPublishing() throws IOException {
+		for (boolean initial : List.of(true, false)) {
+			Path logFile = Files.writeString(tempDir.resolve("rotate-" + initial + ".log"), "old\n");
+			LogFileModel model = initial ? null : new LogFileModel(logFile);
+			LogFileModel.Snapshot before = initial ? null : model.snapshot();
+			Files.writeString(logFile, "a\n".repeat(16384), StandardOpenOption.APPEND);
+			Path replacement = Files.writeString(tempDir.resolve("replacement-" + initial + ".log"),
+					"b\n".repeat(16386));
+			Files.setLastModifiedTime(replacement, Files.getLastModifiedTime(logFile));
+			AtomicInteger checks = new AtomicInteger();
+			BooleanSupplier rotate = () -> {
+				if (checks.incrementAndGet() == 5) {
+					try {
+						Files.move(replacement, logFile, StandardCopyOption.REPLACE_EXISTING);
+					} catch (IOException e) {
+						throw new UncheckedIOException(e);
+					}
+				}
+				return false;
+			};
+			assertThrows(IOException.class, () -> {
+				if (initial)
+					new LogFileModel(logFile, rotate);
+				else
+					model.updateIndex(rotate);
+			});
+			assertTrue(checks.get() >= 5);
+			if (!initial)
+				assertSame(before, model.snapshot());
+		}
+	}
+
+	@Test
+	public void testTailRewriteWithGrowthDuringInitialIndexIsRejected() throws IOException {
+		Path logFile = Files.writeString(tempDir.resolve("rewrite-during-index.log"), "a\n".repeat(16384));
+		FileTime modified = Files.getLastModifiedTime(logFile);
+		AtomicInteger checks = new AtomicInteger();
+		assertThrows(IOException.class, () -> new LogFileModel(logFile, () -> {
+			if (checks.incrementAndGet() == 5) {
+				try (RandomAccessFile file = new RandomAccessFile(logFile.toFile(), "rw")) {
+					file.seek(file.length() - 2);
+					file.writeBytes("xxmore\n");
+					Files.setLastModifiedTime(logFile, modified);
+				} catch (IOException e) {
+					throw new UncheckedIOException(e);
+				}
+			}
+			return false;
+		}));
+	}
 
 	@Test
 	public void testOversizedLineRejectedBeforePayloadRead() throws IOException {
